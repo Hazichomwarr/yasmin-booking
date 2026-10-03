@@ -1,0 +1,2 @@
+import {StyleCard} from "@/components/landing/StyleCard";import {trendingStyles} from "@/lib/landing-data";import styles from "./TrendingStyles.module.css";
+export function TrendingStyles(){return <section className={styles.section}><div className={styles.container}><p className={styles.eyebrow}><span/>TRENDING STYLES<span/></p><h2 className={styles.title}>Get Inspired</h2><p className={styles.copy}>Explore some of our most loved styles.</p><div className={styles.grid}>{trendingStyles.map(style=><StyleCard key={style.name} {...style}/>)}</div></div></section>}

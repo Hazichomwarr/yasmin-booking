@@ -1,0 +1,9 @@
+.header { position: fixed; inset: 0 0 auto; z-index: 100; width: 100%; background: transparent; }
+.inner { display: flex; align-items: center; justify-content: space-between; width: min(calc(100% - 64px), var(--content-max)); margin-inline: auto; padding-top: 31px; }
+.logo { position: relative; display: block; flex: 0 0 72px; width: 72px; height: 72px; overflow: hidden; border-radius: 50%; line-height: 0; }
+.logoImage { object-fit: contain; }
+.locations { display: flex; align-items: center; gap: 10px; border: 0; border-radius: 999px; padding: 14px 21px; background: rgba(255,253,251,.9); color: var(--color-ink); box-shadow: 0 10px 30px rgba(72,34,20,.08); font: 600 17px/1 Arial, sans-serif; }
+.locations svg { width: 25px; fill: none; stroke: var(--color-rose); stroke-width: 2; }
+.chevron { color: var(--color-rose); font-size: 24px; }
+@media (max-width: 768px) { .inner { width: min(calc(100% - 40px), 620px); padding-top: 18px; } .logo { flex-basis: 60px; width: 60px; height: 60px; } .locations { padding: 11px 14px; font-size: 14px; } .locations svg { width: 20px; } }
+@media (max-width: 430px) { .inner { width: calc(100% - 32px); } .logo { flex-basis: 56px; width: 56px; height: 56px; } .locations { gap: 5px; padding: 9px 11px; font-size: 12px; } .locations svg { width: 17px; } .chevron { font-size: 19px; } }

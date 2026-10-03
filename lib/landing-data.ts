@@ -1,0 +1,2 @@
+export type StyleCardData={name:string;imagePosition:string;cropClass:"braids"|"sew-in"|"silk-press"|"locs"};
+export const trendingStyles:StyleCardData[]=[{name:"Knotless Braids",imagePosition:"64% center",cropClass:"braids"},{name:"Sew-In",imagePosition:"67% 31%",cropClass:"sew-in"},{name:"Silk Press",imagePosition:"74% 22%",cropClass:"silk-press"},{name:"Locs",imagePosition:"78% center",cropClass:"locs"}];

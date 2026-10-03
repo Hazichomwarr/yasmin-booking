@@ -1,0 +1,67 @@
+.signals {
+  display: flex;
+  width: min(100%, 550px);
+  margin-top: 38px;
+  justify-content: space-between;
+  text-align: center;
+}
+
+.signals > div {
+  position: relative;
+  flex: 1;
+}
+
+.signals > div + div::before {
+  position: absolute;
+  left: 0;
+  height: 57px;
+  content: "";
+  border-left: 1px solid rgba(218, 169, 127, 0.25);
+}
+
+.signals svg {
+  display: block;
+  width: 33px;
+  height: 33px;
+  margin: 0 auto 12px;
+  fill: none;
+  stroke: #cd3965;
+  stroke-width: 1.7;
+}
+
+.signals > div:first-child svg {
+  fill: #d9a045;
+  stroke: #d9a045;
+}
+
+.signals span {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+/* Tablet / Mobile */
+
+@media (max-width: 768px) {
+  .signals {
+    max-width: 440px;
+    margin-top: 28px;
+  }
+
+  .signals svg {
+    width: 29px;
+    height: 29px;
+    margin-bottom: 8px;
+  }
+
+  .signals span {
+    font-size: 13px;
+  }
+}
+
+/* Small Mobile */
+
+@media (max-width: 430px) {
+  .signals {
+    margin-top: 25px;
+  }
+}
