@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { publiclyVisibleHairstyle } from "@/lib/catalog";
 import { prisma } from "@/lib/prisma";
 
+import { appendAppointmentEvent, eventDetails } from "./appointment-events";
 import { dateClosedReason, locationClosedReason, slotClosedReason } from "./booking-policy";
 import { countConsumedCapacity, lockBookingSlotCapacity, remainingCapacity } from "./capacity";
 import { BookingError } from "./errors";
@@ -37,6 +38,9 @@ import {
  * transaction takes. Counts remain per date. At Yasmin's scale this is
  * preferable to a separate locking subsystem; a per-(slot, date) advisory
  * lock would be the upgrade path if contention ever matters.
+ *
+ * History: the hold and its CREATED AppointmentEvent are written in the same
+ * transaction.
  *
  * Stripe handoff (YASMIN-1E): the returned BookingHold carries everything
  * checkout needs (appointment id, deposit snapshot, expiry). This module does
@@ -164,7 +168,7 @@ export async function acquireBookingHold(
         throw new BookingError("CAPACITY_FULL", "This booking slot is full on that date.");
       }
 
-      return tx.appointment.create({
+      const created = await tx.appointment.create({
         data: {
           status: "PENDING_PAYMENT",
           holdExpiresAt: holdExpiryFor(now),
@@ -182,6 +186,34 @@ export async function acquireBookingHold(
           ...v1BookingPriceSnapshot(),
         },
       });
+
+      // The hold entered the system — same transaction, so no appointment
+      // exists without its CREATED event. (Not a payment confirmation.)
+      await appendAppointmentEvent(
+        tx,
+        created.id,
+        "CREATED",
+        eventDetails.created({
+          status: created.status,
+          holdExpiresAt: created.holdExpiresAt?.toISOString() ?? null,
+          schedule: {
+            locationId: location.id,
+            locationName: created.locationNameSnapshot,
+            timeZone: location.timeZone,
+            bookingSlotId: slot.id,
+            appointmentDate,
+            slotTime: created.slotTimeSnapshot,
+          },
+          hairstyleId: created.hairstyleId,
+          hairstyleNameSnapshot: created.hairstyleNameSnapshot,
+          pricing: {
+            totalPriceCents: created.totalPriceCents,
+            depositAmountCents: created.depositAmountCents,
+            balanceDueCents: created.balanceDueCents,
+          },
+        }),
+      );
+      return created;
     },
     // The lock-then-count argument relies on READ COMMITTED statement snapshots.
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },

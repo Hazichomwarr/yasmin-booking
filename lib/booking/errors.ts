@@ -17,7 +17,14 @@ export type BookingErrorCode =
   | "SLOT_NOT_BOOKABLE"
   | "CAPACITY_FULL"
   | "CUSTOMER_NOT_FOUND"
-  | "HAIRSTYLE_NOT_AVAILABLE";
+  | "HAIRSTYLE_NOT_AVAILABLE"
+  | "APPOINTMENT_NOT_FOUND"
+  /** The lifecycle command is not allowed from the appointment's current status. */
+  | "INVALID_APPOINTMENT_TRANSITION"
+  /** Only CONFIRMED appointments can be rescheduled in V1. */
+  | "APPOINTMENT_NOT_RESCHEDULABLE"
+  /** Booking details can only be edited while PENDING_PAYMENT or CONFIRMED. */
+  | "APPOINTMENT_NOT_EDITABLE";
 
 export class BookingError extends Error {
   readonly code: BookingErrorCode;

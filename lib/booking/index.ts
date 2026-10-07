@@ -19,10 +19,17 @@
  * `acquireBookingHold` reserves a place. Stripe checkout must start from an
  * acquired hold, never from an availability read.
  *
- * For YASMIN-1D (admin booking / rescheduling): reuse
- * `lockBookingSlotCapacity` + `countConsumedCapacity` + `remainingCapacity`.
- * A reschedule must acquire capacity on the destination slot/date before
- * giving up the original place; lock multiple slots in id order.
+ * - Lifecycle transitions (one policy) ... lifecycle-policy.ts
+ * - Cancel / complete / no-show / notes .. lifecycle.ts
+ * - Rescheduling ......................... reschedule.ts
+ * - Audit trail (append-only) ............ appointment-events.ts
+ *
+ * Lock order for anything that changes an existing appointment: the
+ * appointment row first, then at most one BookingSlot row. Hold acquisition
+ * locks only the BookingSlot. No operation holds two slot locks.
+ *
+ * There is intentionally NO exported way to move PENDING_PAYMENT → CONFIRMED.
+ * That transition will be added by verified-payment orchestration (YASMIN-1E).
  *
  * For YASMIN-1E (Stripe): see the hold-expiry race documented in the 1C
  * report — a payment can complete after its hold has logically expired.
@@ -74,3 +81,36 @@ export {
   v1BookingPriceSnapshot,
   type BookingPriceSnapshot,
 } from "./pricing";
+
+export {
+  getAppointment,
+  type AppointmentChange,
+  type AppointmentView,
+} from "./appointments";
+
+export {
+  LIFECYCLE_TRANSITIONS,
+  RESCHEDULABLE_STATUSES,
+  TERMINAL_STATUSES,
+  type LifecycleCommand,
+} from "./lifecycle-policy";
+
+export {
+  cancelAppointment,
+  completeAppointment,
+  markAppointmentNoShow,
+  updateAppointmentCustomerNotes,
+} from "./lifecycle";
+
+export { rescheduleAppointment, type RescheduleAppointmentInput } from "./reschedule";
+
+export {
+  listAppointmentEvents,
+  type AppointmentEventDetails,
+  type AppointmentEventRecord,
+  type CreatedEventDetails,
+  type FieldChangedEventDetails,
+  type RescheduledEventDetails,
+  type ScheduleFacts,
+  type StatusChangedEventDetails,
+} from "./appointment-events";

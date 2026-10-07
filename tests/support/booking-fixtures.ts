@@ -110,3 +110,77 @@ export async function fillSlot(
     await insertAppointment({ slot, customerId: customer.id, appointmentDate, status: "CONFIRMED" });
   }
 }
+
+/**
+ * Inserts an appointment in `status` with realistic booking-time snapshots
+ * taken from the slot's location — test setup standing in for flows that do
+ * not exist yet (e.g. verified-payment confirmation in YASMIN-1E).
+ */
+export async function createAppointmentIn(options: {
+  slot: { id: string; locationId: string; localStartTime: Date };
+  appointmentDate: string;
+  status?: AppointmentStatus;
+  holdExpiresAt?: Date | null;
+  hairstyle?: { id: string; name: string } | null;
+  customerNotes?: string | null;
+  preferredStylistName?: string | null;
+}) {
+  const customer = await createCustomer();
+  const location = await prisma.salonLocation.findUniqueOrThrow({ where: { id: options.slot.locationId } });
+  return prisma.appointment.create({
+    data: {
+      customerId: customer.id,
+      locationId: location.id,
+      bookingSlotId: options.slot.id,
+      appointmentDate: new Date(`${options.appointmentDate}T00:00:00.000Z`),
+      status: options.status ?? "CONFIRMED",
+      holdExpiresAt: options.holdExpiresAt ?? null,
+      locationNameSnapshot: location.name,
+      slotTimeSnapshot: options.slot.localStartTime.toISOString().slice(11, 16),
+      hairstyleId: options.hairstyle?.id ?? null,
+      hairstyleNameSnapshot: options.hairstyle?.name ?? null,
+      customerNotes: options.customerNotes ?? null,
+      preferredStylistName: options.preferredStylistName ?? null,
+      totalPriceCents: 20000,
+      depositAmountCents: 4000,
+      balanceDueCents: 16000,
+    },
+  });
+}
+
+/** Consuming appointments in one (slot, date) bucket at NOW, via the 1C rule. */
+export async function consumedIn(slotId: string, appointmentDate: string, now = NOW) {
+  const { capacityConsumingAppointments } = await import("@/lib/booking/capacity");
+  return prisma.appointment.count({
+    where: {
+      bookingSlotId: slotId,
+      appointmentDate: new Date(`${appointmentDate}T00:00:00.000Z`),
+      ...capacityConsumingAppointments(now),
+    },
+  });
+}
+
+/**
+ * Installs a local-test-only trigger that makes every INSERT (or UPDATE) on
+ * `table` fail, runs `action`, and always removes the trigger.
+ * Used to prove lifecycle writes roll back together.
+ */
+export async function withFailingWrites<T>(
+  table: "AppointmentEvent" | "Appointment",
+  operation: "INSERT" | "UPDATE",
+  action: () => Promise<T>,
+): Promise<T> {
+  await prisma.$executeRawUnsafe(`
+    CREATE OR REPLACE FUNCTION test_fail_write() RETURNS trigger AS $$
+    BEGIN RAISE EXCEPTION 'forced test failure on % %', TG_OP, TG_TABLE_NAME; END $$ LANGUAGE plpgsql
+  `);
+  await prisma.$executeRawUnsafe(
+    `CREATE TRIGGER test_fail_write BEFORE ${operation} ON "${table}" FOR EACH ROW EXECUTE FUNCTION test_fail_write()`,
+  );
+  try {
+    return await action();
+  } finally {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS test_fail_write ON "${table}"`);
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS test_fail_write()`);
+  }
+}

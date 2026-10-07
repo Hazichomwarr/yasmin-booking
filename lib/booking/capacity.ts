@@ -72,16 +72,24 @@ export function capacityConsumingAppointments(effectiveNow: Date): Prisma.Appoin
 /** The shared client or a transaction client. */
 export type CapacityClient = Pick<Prisma.TransactionClient, "appointment">;
 
-/** Places consumed in one slot on one salon date at `effectiveNow`. */
+/**
+ * Places consumed in one slot on one salon date at `effectiveNow`.
+ *
+ * `excludingAppointmentId` leaves one appointment out of the count — used by
+ * rescheduling so the appointment being moved never counts against its own
+ * destination.
+ */
 export function countConsumedCapacity(
   db: CapacityClient,
   slot: { bookingSlotId: string; appointmentDate: SalonDate },
   effectiveNow: Date,
+  options: { excludingAppointmentId?: string } = {},
 ): Promise<number> {
   return db.appointment.count({
     where: {
       bookingSlotId: slot.bookingSlotId,
       appointmentDate: salonDateToDatabase(slot.appointmentDate),
+      ...(options.excludingAppointmentId ? { id: { not: options.excludingAppointmentId } } : {}),
       ...capacityConsumingAppointments(effectiveNow),
     },
   });
