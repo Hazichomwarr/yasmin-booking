@@ -1,0 +1,214 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum AppointmentStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum PaymentProvider {
+  STRIPE
+}
+
+enum PaymentPurpose {
+  BOOKING_DEPOSIT
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum AppointmentEventType {
+  CREATED
+  PAYMENT_CONFIRMED
+  RESCHEDULED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+  CUSTOMER_UPDATED
+  NOTE_UPDATED
+}
+
+model SalonLocation {
+  id                   String        @id @default(cuid())
+  name                 String
+  addressLine1         String?
+  addressLine2         String?
+  city                 String?
+  state                String?
+  postalCode           String?
+  phone                String?
+  isActive             Boolean       @default(true)
+  acceptsOnlineBooking Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  bookingSlots         BookingSlot[]
+  appointments         Appointment[]
+
+  @@index([isActive])
+  @@index([acceptsOnlineBooking])
+}
+
+model BookingSlot {
+  id             String          @id @default(cuid())
+  locationId     String
+  localStartTime DateTime        @db.Time(0)
+  capacity       Int
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  location       SalonLocation   @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  appointments   Appointment[]
+
+  @@unique([locationId, localStartTime])
+  @@index([locationId, isActive])
+}
+
+model Customer {
+  id                 String        @id @default(cuid())
+  name               String
+  email              String
+  phone              String
+  emailMarketingAt   DateTime?
+  smsMarketingAt     DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  appointments       Appointment[]
+
+  @@index([email])
+  @@index([phone])
+}
+
+model HairstyleCategory {
+  id          String      @id @default(cuid())
+  name        String
+  slug        String      @unique
+  description String?
+  isActive    Boolean     @default(true)
+  sortOrder   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  hairstyles  Hairstyle[]
+
+  @@index([isActive, sortOrder])
+}
+
+model Hairstyle {
+  id          String             @id @default(cuid())
+  categoryId  String
+  name        String
+  slug        String             @unique
+  description String?
+  isActive    Boolean            @default(true)
+  sortOrder   Int                @default(0)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  category    HairstyleCategory  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  media       HairstyleMedia[]
+  appointments Appointment[]
+
+  @@index([categoryId, isActive, sortOrder])
+}
+
+model HairstyleMedia {
+  id          String      @id @default(cuid())
+  hairstyleId String
+  type        MediaType
+  storageKey  String      @unique
+  deliveryUrl String?
+  altText     String?
+  caption     String?
+  sortOrder   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  hairstyle   Hairstyle   @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+
+  @@index([hairstyleId, type, sortOrder])
+}
+
+model Appointment {
+  id                    String             @id @default(cuid())
+  customerId            String
+  locationId            String
+  bookingSlotId         String
+  hairstyleId           String?
+  appointmentDate       DateTime           @db.Date
+  status                AppointmentStatus  @default(PENDING_PAYMENT)
+  preferredStylistName  String?
+  customerNotes         String?
+  holdExpiresAt         DateTime?
+  locationNameSnapshot  String
+  slotTimeSnapshot      String
+  hairstyleNameSnapshot String?
+  totalPriceCents       Int
+  depositAmountCents    Int
+  balanceDueCents       Int
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  customer              Customer           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  location              SalonLocation      @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  bookingSlot           BookingSlot        @relation(fields: [bookingSlotId], references: [id], onDelete: Restrict)
+  hairstyle             Hairstyle?         @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  payments              Payment[]
+  events                AppointmentEvent[]
+
+  @@index([appointmentDate, status])
+  @@index([locationId, appointmentDate, bookingSlotId])
+  @@index([customerId])
+  @@index([holdExpiresAt])
+}
+
+model Payment {
+  id                        String          @id @default(cuid())
+  appointmentId             String
+  provider                  PaymentProvider
+  purpose                   PaymentPurpose
+  status                    PaymentStatus   @default(PENDING)
+  amountCents               Int
+  currency                  String          @default("usd")
+  providerCheckoutSessionId String?         @unique
+  providerPaymentIntentId   String?         @unique
+  paidAt                    DateTime?
+  createdAt                 DateTime        @default(now())
+  updatedAt                 DateTime        @updatedAt
+  appointment               Appointment     @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+
+  @@index([appointmentId])
+  @@index([status])
+}
+
+model AppointmentEvent {
+  id            String               @id @default(cuid())
+  appointmentId String
+  type          AppointmentEventType
+  details       Json?
+  createdAt     DateTime             @default(now())
+  appointment   Appointment          @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+
+  @@index([appointmentId, createdAt])
+}
+
+model AdminUser {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
