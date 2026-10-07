@@ -27,7 +27,7 @@ export function resolveTestDatabase(): TestDatabaseResolution {
     return {
       status: "not-configured",
       reason:
-        "TEST_DATABASE_URL is not set; database-backed catalog tests are skipped. See tests/README.md.",
+        "TEST_DATABASE_URL is not set; database-backed tests are skipped. See tests/README.md.",
     };
   }
 

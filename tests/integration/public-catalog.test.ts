@@ -11,7 +11,7 @@ import {
   listPublicHairstyles,
 } from "@/lib/catalog";
 
-import { integrationSkip, useCleanTestDatabase } from "../support/catalog-fixtures";
+import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
 describe("public catalog visibility", { skip: integrationSkip }, () => {
   useCleanTestDatabase();

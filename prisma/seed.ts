@@ -18,11 +18,13 @@ async function main() {
     update: {
       name: "William Street",
       acceptsOnlineBooking: true,
+      timeZone: "America/New_York",
     },
     create: {
       id: "william-street",
       name: "William Street",
       acceptsOnlineBooking: true,
+      timeZone: "America/New_York",
     },
   });
 

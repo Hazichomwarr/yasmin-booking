@@ -16,11 +16,8 @@ import {
 import { prisma } from "@/lib/prisma";
 
 import { assertCatalogError } from "../support/assertions";
-import {
-  createHistoricalAppointment,
-  integrationSkip,
-  useCleanTestDatabase,
-} from "../support/catalog-fixtures";
+import { createHistoricalAppointment } from "../support/catalog-fixtures";
+import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
 describe("catalog hairstyles", { skip: integrationSkip }, () => {
   useCleanTestDatabase();

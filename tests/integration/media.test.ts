@@ -16,7 +16,7 @@ import {
 import { prisma } from "@/lib/prisma";
 
 import { assertCatalogError } from "../support/assertions";
-import { integrationSkip, useCleanTestDatabase } from "../support/catalog-fixtures";
+import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
 describe("hairstyle media metadata", { skip: integrationSkip }, () => {
   useCleanTestDatabase();

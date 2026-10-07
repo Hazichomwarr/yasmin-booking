@@ -66,6 +66,9 @@ export {
   listPublicHairstyles,
 } from "./public-catalog";
 
+/** The public visibility rule, for other domains (e.g. booking) to reuse. */
+export { isPubliclyVisible, publiclyVisibleHairstyle } from "./read-shapes";
+
 export type {
   AdminCategory,
   AdminHairstyle,

@@ -17,9 +17,9 @@ const resolution = resolveTestDatabase();
 if (resolution.status === "ready") {
   process.env.DATABASE_URL = resolution.url;
   process.env.DIRECT_URL = resolution.url;
-  delete process.env.CATALOG_INTEGRATION_SKIP_REASON;
+  delete process.env.INTEGRATION_SKIP_REASON;
 } else {
   process.env.DATABASE_URL = UNREACHABLE_DATABASE_URL;
   process.env.DIRECT_URL = UNREACHABLE_DATABASE_URL;
-  process.env.CATALOG_INTEGRATION_SKIP_REASON = resolution.reason;
+  process.env.INTEGRATION_SKIP_REASON = resolution.reason;
 }
