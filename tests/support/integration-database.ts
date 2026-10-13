@@ -24,7 +24,8 @@ export function useCleanTestDatabase() {
 
   beforeEach(async () => {
     await prisma.$executeRawUnsafe(`
-      TRUNCATE "AppointmentEvent", "Payment", "Appointment", "Customer",
+      TRUNCATE "PaymentProcessingException",
+               "AppointmentEvent", "Payment", "Appointment", "Customer",
                "BookingSlot", "SalonLocation",
                "HairstyleMedia", "Hairstyle", "HairstyleCategory"
       CASCADE

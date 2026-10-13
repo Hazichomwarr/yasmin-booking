@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { AppointmentStatus, PaymentStatus } from "@prisma/client";
+import type { AppointmentStatus } from "@prisma/client";
 
 import { acquireBookingHold, cancelAppointment, isBookingError, listAppointmentEvents } from "@/lib/booking";
 import type {
@@ -14,7 +14,6 @@ import {
 } from "@/lib/booking/payment-fulfillment";
 import {
   verifiedCheckoutEvidence,
-  type CheckoutEvidenceInput,
   type VerifiedCheckoutEvidence,
 } from "@/lib/booking/payment-policy";
 import { prisma } from "@/lib/prisma";
@@ -22,131 +21,39 @@ import { prisma } from "@/lib/prisma";
 import {
   WEEK,
   consumedIn,
-  createAppointmentIn,
   createCustomer,
-  createLocation,
   withFailingWrites,
 } from "../support/booking-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
+import {
+  DEPOSIT,
+  appointmentStatus,
+  assertInconsistent,
+  assertOutcome,
+  assertPaymentInvariants,
+  assertUntouched,
+  createHeld,
+  createPlace,
+  databaseNow,
+  holdRowLock,
+  paid,
+  paymentRow,
+  unpaid,
+  waitForLockWaiters,
+  type Held,
+} from "../support/payment-fixtures";
 
 /**
  * YASMIN-1E.3 payment fulfillment against real PostgreSQL. Concurrency uses
  * real separate connections (Prisma's pool) and explicit lock barriers.
  *
- * The service always decides at the database clock, so fixtures are placed
- * relative to it. Synthetic identifiers only: nothing here is a Stripe object.
+ * Fixtures: tests/support/payment-fixtures.ts (placed relative to the
+ * database clock; synthetic identifiers only).
  */
 
-const MINUTE = 60_000;
 const ROUNDS = 8;
-const DEPOSIT = 4000;
 /** A past Monday: closed by the date policy whatever today is. */
 const PAST_MONDAY = "2026-01-05";
-
-let sequence = 0;
-
-async function databaseNow(): Promise<Date> {
-  const [{ now }] = await prisma.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
-  return now;
-}
-
-type Slot = Awaited<ReturnType<typeof createLocation>>["slot"];
-
-/** One appointment with its deposit Payment, as checkout creation will leave them. */
-type Held = {
-  slot: Slot;
-  appointmentId: string;
-  paymentId: string;
-  session: string;
-  intent: string;
-  paidAt: Date;
-};
-
-async function createPlace(options: { capacity?: number; slotActive?: boolean } = {}) {
-  const { slot } = await createLocation({
-    name: `Fulfillment ${++sequence}`,
-    slots: [{ time: "11:00", capacity: options.capacity ?? 10, isActive: options.slotActive ?? true }],
-  });
-  return slot;
-}
-
-async function createHeld(
-  slot: Slot,
-  options: {
-    /** Hold expiry relative to the database clock; null for no hold expiry. */
-    holdMinutes?: number | null;
-    status?: AppointmentStatus;
-    date?: string;
-    paymentStatus?: PaymentStatus;
-    /** Whether checkout creation already stored the session id. */
-    bindSession?: boolean;
-  } = {},
-): Promise<Held> {
-  const now = await databaseNow();
-  const holdMinutes = options.holdMinutes === undefined ? 10 : options.holdMinutes;
-  const appointment = await createAppointmentIn({
-    slot,
-    appointmentDate: options.date ?? WEEK.monday,
-    status: options.status ?? "PENDING_PAYMENT",
-    holdExpiresAt: holdMinutes === null ? null : new Date(now.getTime() + holdMinutes * MINUTE),
-  });
-  const n = ++sequence;
-  const session = `cs_test_synthetic_${n}`;
-  const payment = await prisma.payment.create({
-    data: {
-      appointmentId: appointment.id,
-      provider: "STRIPE",
-      purpose: "BOOKING_DEPOSIT",
-      amountCents: DEPOSIT,
-      status: options.paymentStatus ?? "PENDING",
-      providerCheckoutSessionId: options.bindSession === false ? null : session,
-    },
-  });
-  return {
-    slot,
-    appointmentId: appointment.id,
-    paymentId: payment.id,
-    session,
-    intent: `pi_synthetic_${n}`,
-    paidAt: new Date(Math.floor(now.getTime() / 1000) * 1000 - 30_000),
-  };
-}
-
-function paid(held: Held, overrides: Partial<CheckoutEvidenceInput> = {}): VerifiedCheckoutEvidence {
-  return verifiedCheckoutEvidence({
-    checkoutSessionId: held.session,
-    sessionStatus: "complete",
-    paymentStatus: "paid",
-    paymentIntentId: held.intent,
-    amountCents: DEPOSIT,
-    currency: "usd",
-    paidAt: held.paidAt,
-    refundedOrPendingCents: 0,
-    stripeEventId: `evt_synthetic_${++sequence}`,
-    ...overrides,
-  });
-}
-
-function unpaid(held: Held, sessionStatus: "open" | "expired"): VerifiedCheckoutEvidence {
-  return verifiedCheckoutEvidence({ checkoutSessionId: held.session, sessionStatus, paymentStatus: "unpaid" });
-}
-
-function assertOutcome<K extends PaymentFulfillmentOutcome["kind"]>(
-  outcome: PaymentFulfillmentOutcome,
-  kind: K,
-): asserts outcome is Extract<PaymentFulfillmentOutcome, { kind: K }> {
-  assert.equal(outcome.kind, kind, JSON.stringify(outcome));
-}
-
-function assertInconsistent(
-  outcome: PaymentFulfillmentOutcome,
-  problem: string,
-  category: string,
-): asserts outcome is Extract<PaymentFulfillmentOutcome, { kind: "inconsistent" }> {
-  assertOutcome(outcome, "inconsistent");
-  assert.equal(outcome.problem, problem);
-  assert.equal(outcome.category, category);
-}
 
 const snapshotOf = (held: { appointmentId: string }) =>
   prisma.appointment.findUniqueOrThrow({
@@ -167,22 +74,6 @@ const snapshotOf = (held: { appointmentId: string }) =>
       createdAt: true,
     },
   });
-
-const paymentRow = (held: { paymentId: string }) => prisma.payment.findUniqueOrThrow({ where: { id: held.paymentId } });
-const appointmentStatus = async (held: { appointmentId: string }) =>
-  (await prisma.appointment.findUniqueOrThrow({ where: { id: held.appointmentId } })).status;
-
-/** Asserts the Payment and Appointment were not touched. */
-async function assertUntouched(held: Held, expected: { payment: PaymentStatus; appointment: AppointmentStatus }) {
-  const payment = await paymentRow(held);
-  assert.equal(payment.status, expected.payment);
-  assert.equal(payment.paidAt, null);
-  assert.equal(payment.allocatedAt, null);
-  assert.equal(payment.providerPaymentIntentId, null);
-  assert.equal(payment.reconciliationReason, null);
-  assert.equal(await appointmentStatus(held), expected.appointment);
-  assert.deepEqual(await listAppointmentEvents(held.appointmentId), []);
-}
 
 async function assertConfirmed(held: Held, outcome: PaymentFulfillmentOutcome, method: string) {
   assertOutcome(outcome, "confirmed");
@@ -228,73 +119,6 @@ async function assertReconciled(held: Held, outcome: PaymentFulfillmentOutcome, 
   assert.equal(details.appointmentStatus, appointment);
   assert.equal(details.decidedAt, outcome.decidedAt.toISOString());
   return details;
-}
-
-/** Every Payment row satisfies the migration #3 invariants (also enforced by CHECKs). */
-async function assertPaymentInvariants() {
-  const [{ checks }] = await prisma.$queryRaw<{ checks: number }[]>`
-    SELECT count(*)::int AS checks FROM pg_constraint
-    WHERE conrelid = '"Payment"'::regclass AND contype = 'c' AND convalidated
-  `;
-  assert.equal(checks, 10);
-  const [{ violations }] = await prisma.$queryRaw<{ violations: number }[]>`
-    SELECT count(*)::int AS violations FROM "Payment" WHERE NOT (
-      "amountCents" > 0 AND "currency" ~ '^[a-z]{3}$'
-      AND ("status" IN ('PAID', 'REFUNDED')) = ("paidAt" IS NOT NULL)
-      AND ("paidAt" IS NULL OR "providerPaymentIntentId" IS NOT NULL)
-      AND ("allocatedAt" IS NULL OR "paidAt" IS NOT NULL)
-      AND ("paidAt" IS NULL OR "allocatedAt" IS NOT NULL OR "reconciliationReason" IS NOT NULL)
-      AND ("reconciliationReason" IS NULL OR "paidAt" IS NOT NULL)
-      AND "refundedAmountCents" BETWEEN 0 AND "amountCents"
-      AND ("refundedAmountCents" = 0 OR "paidAt" IS NOT NULL)
-      AND ("status" = 'REFUNDED') = ("paidAt" IS NOT NULL AND "refundedAmountCents" = "amountCents")
-    )
-  `;
-  assert.equal(violations, 0);
-}
-
-/**
- * Barrier: holds a row lock on its own connection until released, so
- * contenders started meanwhile all queue on it.
- */
-async function holdRowLock(table: "Appointment" | "BookingSlot", id: string) {
-  let release!: () => void;
-  let acquired!: () => void;
-  const released = new Promise<void>((resolve) => (release = resolve));
-  const ready = new Promise<void>((resolve) => (acquired = resolve));
-  const done = prisma.$transaction(
-    async (tx) => {
-      await tx.$queryRawUnsafe(`SELECT "id" FROM "${table}" WHERE "id" = $1 FOR UPDATE`, id);
-      acquired();
-      await released;
-    },
-    { timeout: 20_000 },
-  );
-  await ready;
-  return async () => {
-    release();
-    await done;
-  };
-}
-
-/** Waits until `count` backends of this database are blocked on a lock. */
-async function waitForLockWaiters(count: number) {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    const [{ waiting }] = await prisma.$queryRaw<{ waiting: number }[]>`
-      SELECT count(*)::int AS waiting FROM pg_stat_activity
-      WHERE datname = current_database() AND wait_event_type = 'Lock'
-    `;
-    if (waiting >= count) return;
-    if (Date.now() > deadline) {
-      const activity = await prisma.$queryRaw<unknown[]>`
-        SELECT pid, state, wait_event_type, wait_event, left(query, 80) AS query FROM pg_stat_activity
-        WHERE datname = current_database()
-      `;
-      throw new Error(`only ${waiting} of ${count} expected lock waiters: ${JSON.stringify(activity)}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
 }
 
 /**

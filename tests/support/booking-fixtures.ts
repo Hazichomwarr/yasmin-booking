@@ -166,7 +166,7 @@ export async function consumedIn(slotId: string, appointmentDate: string, now = 
  * Used to prove lifecycle writes roll back together.
  */
 export async function withFailingWrites<T>(
-  table: "AppointmentEvent" | "Appointment",
+  table: "AppointmentEvent" | "Appointment" | "PaymentProcessingException",
   operation: "INSERT" | "UPDATE",
   action: () => Promise<T>,
 ): Promise<T> {

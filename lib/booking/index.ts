@@ -25,6 +25,7 @@
  * - Audit trail (append-only) ............ appointment-events.ts
  * - Payment confirmation decision ........ payment-policy.ts (pure)
  * - Applying verified payment evidence ... payment-fulfillment.ts
+ * - Unapplicable payment evidence ....... payment-exceptions.ts (durable record + webhook contract)
  *
  * Lock order for anything that changes an existing appointment: the
  * appointment row first, then (payment fulfillment) its Payment row, then at

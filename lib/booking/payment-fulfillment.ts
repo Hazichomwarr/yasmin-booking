@@ -134,7 +134,7 @@ export type PaymentFulfillmentOutcome =
       alert: FulfillmentAlert;
     };
 
-type InconsistentOutcome = Extract<PaymentFulfillmentOutcome, { kind: "inconsistent" }>;
+export type InconsistentFulfillmentOutcome = Extract<PaymentFulfillmentOutcome, { kind: "inconsistent" }>;
 
 type PaymentLink = { paymentId: string; appointmentId: string };
 
@@ -190,7 +190,7 @@ export async function applyVerifiedCheckoutSession(
 }
 
 /** Finds the Payment the evidence belongs to, verifying every stated association. */
-async function resolvePayment(evidence: VerifiedCheckoutEvidence): Promise<PaymentLink | InconsistentOutcome> {
+async function resolvePayment(evidence: VerifiedCheckoutEvidence): Promise<PaymentLink | InconsistentFulfillmentOutcome> {
   const reference = evidence.reference;
   const bySession = await prisma.payment.findUnique({
     where: { providerCheckoutSessionId: evidence.checkoutSessionId },
@@ -445,7 +445,7 @@ function inconsistentOutcome(
   problem: FulfillmentProblem,
   category: FulfillmentProblemCategory,
   message: string,
-): InconsistentOutcome {
+): InconsistentFulfillmentOutcome {
   return {
     kind: "inconsistent",
     category,

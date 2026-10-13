@@ -250,6 +250,72 @@ model Payment {
   @@index([reconciliationReason])
 }
 
+/// How a verified payment failed to apply locally (mirrors the fulfillment
+/// service's problem categories).
+enum PaymentExceptionCategory {
+  IDENTITY_CONFLICT
+  CORRUPT_LOCAL_STATE
+  MISSING_ASSOCIATION
+  UNUSABLE_EVIDENCE
+}
+
+/// The fulfillment service's persistent problem codes.
+enum PaymentExceptionProblem {
+  LOCAL_RECORD_INVALID
+  ALLOCATED_BUT_APPOINTMENT_PENDING
+  CHECKOUT_SESSION_MISMATCH
+  PAYMENT_INTENT_MISMATCH
+  PAID_AT_MISMATCH
+  VERIFIED_AMOUNT_CHANGED
+  LOCAL_PAID_BUT_PROVIDER_UNPAID
+  NO_PAYMENT_REQUIRED
+  PAYMENT_NOT_FOUND
+  REFERENCE_MISMATCH
+  PROVIDER_IDENTITY_IN_USE
+  LOCATION_TIME_ZONE_INVALID
+}
+
+// Verified Stripe evidence that could not be applied to a Payment because the
+// association itself is missing, disputed or corrupt. Deliberately NOT linked
+// to Payment/Appointment by foreign key: the expected ids are what the
+// evidence or lookup claimed, kept for investigation, not trusted links.
+//
+// One row per (provider, Checkout Session, problem): repeated deliveries of
+// the same problem update the last observation; the first is never changed.
+// Nothing resolves a row automatically. Unresolved = resolvedAt IS NULL, or
+// observed again after it was resolved (lastObservedAt > resolvedAt).
+// No card data, customer details or raw Stripe payloads are stored.
+model PaymentProcessingException {
+  id                    String                   @id @default(cuid())
+  provider              PaymentProvider
+  checkoutSessionId     String
+  /// The verified charge's PaymentIntent; first one observed is kept.
+  paymentIntentId       String?
+  /// Unverified claims (lookup / session metadata); no foreign key on purpose.
+  expectedPaymentId     String?
+  expectedAppointmentId String?
+  category              PaymentExceptionCategory
+  problem               PaymentExceptionProblem
+  /// Stripe verified a successful charge in at least one observation.
+  moneyReceived         Boolean
+  verifiedAmountCents   Int?
+  verifiedCurrency      String?
+  firstStripeEventId    String?
+  lastStripeEventId     String?
+  firstObservedAt       DateTime
+  lastObservedAt        DateTime
+  occurrenceCount       Int                      @default(1)
+  resolvedAt            DateTime?
+  /// Informational only; written by a human when resolving.
+  resolutionNote        String?
+
+  @@unique([provider, checkoutSessionId, problem])
+  @@index([resolvedAt, lastObservedAt])
+  @@index([paymentIntentId])
+  @@index([expectedPaymentId])
+  @@index([expectedAppointmentId])
+}
+
 model AppointmentEvent {
   id            String               @id @default(cuid())
   appointmentId String
