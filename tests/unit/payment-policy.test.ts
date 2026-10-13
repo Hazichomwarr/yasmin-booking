@@ -11,7 +11,9 @@ import {
   PAYMENT_CONFIRMATION_TRANSITION,
 } from "@/lib/booking/lifecycle-policy";
 import {
+  decidePaymentBeforePlace,
   decidePaymentConfirmation,
+  isVerifiedCheckoutEvidence,
   paymentDecisionEvent,
   verifiedCheckoutEvidence,
   type AppointmentPaymentFacts,
@@ -518,6 +520,7 @@ describe("20. typed audit-event payloads", () => {
           currency: "usd",
           paidAt: "2027-03-01T15:29:00.000Z",
         },
+        previousPaymentStatus: "PENDING",
         allocatedAt: "2027-03-01T15:30:00.000Z",
         confirmation: "within-active-hold",
         hold: { expiresAt: "2027-03-01T15:35:00.000Z", activeAtDecision: true, paidBeforeExpiry: true },
@@ -647,6 +650,7 @@ describe("20. typed audit-event payloads", () => {
         currency: "usd",
         paidAt: PAID_AT,
       },
+      previousPaymentStatus: "PENDING" as const,
       allocatedAt: DECIDED_AT,
       confirmation: "within-active-hold" as const,
       hold: { expiresAt: HOLD_ACTIVE, activeAtDecision: true },
@@ -705,5 +709,76 @@ describe("20. typed audit-event payloads", () => {
     );
 
     assert.ok(unverified && wrongDetails && noContract);
+  });
+});
+
+describe("place-independent phase (1E.3 fast path)", () => {
+  const scenarios: [string, PaymentConfirmationInput][] = [
+    ["first receipt", input()],
+    ["first receipt after EXPIRED", input({ payment: { status: "EXPIRED" } })],
+    ["first receipt after FAILED", input({ payment: { status: "FAILED" } })],
+    ["first receipt, amount mismatch", input({ evidence: evidence({ amountCents: 1 }) })],
+    ["first receipt, cancelled appointment", input({ appointment: { status: "CANCELLED" } })],
+    ["already allocated", input({ payment: allocatedPayment, appointment: CONFIRMED })],
+    ["already recorded unallocated", input({ payment: unallocatedPayment })],
+    ["unpaid open", input({ evidence: evidence({ paymentStatus: "unpaid", sessionStatus: "open" }) })],
+    ["unpaid expired", input({ evidence: evidence({ paymentStatus: "unpaid", sessionStatus: "expired" }) })],
+    ["intent mismatch", input({ payment: { ...allocatedPayment, providerPaymentIntentId: "pi_other" }, appointment: CONFIRMED })],
+    ["session mismatch", input({ payment: { providerCheckoutSessionId: "cs_test_other" } })],
+    ["corrupt record", input({ payment: { amountCents: 1 } })],
+  ];
+
+  for (const [label, scenario] of scenarios) {
+    it(`${label}: same decision with or without the separate first phase`, () => {
+      const early = decidePaymentBeforePlace(scenario);
+      const full = decidePaymentConfirmation(scenario);
+      if (early.kind === "place-required") {
+        assert.ok(full.kind === "confirm" || full.kind === "reconcile", JSON.stringify(full));
+        assert.ok(["PENDING", "EXPIRED", "FAILED"].includes(scenario.payment.status));
+      } else {
+        assert.deepEqual(early, full);
+      }
+    });
+  }
+
+  it("needs neither place facts nor a decision instant", () => {
+    const { evidence: e, payment, appointment } = input({ payment: allocatedPayment, appointment: CONFIRMED });
+    assert.deepEqual(decidePaymentBeforePlace({ evidence: e, payment, appointment }), { kind: "already-allocated" });
+  });
+});
+
+describe("evidence reference and runtime verification", () => {
+  it("carries the server-set metadata reference, frozen", () => {
+    const e = evidence({ metadataPaymentId: "pay_synthetic_1", metadataAppointmentId: "appt_synthetic_1" });
+    assert.deepEqual(e.reference, { paymentId: "pay_synthetic_1", appointmentId: "appt_synthetic_1" });
+    assert.ok(Object.isFrozen(e.reference));
+    assert.equal(evidence().reference, null);
+  });
+
+  it("requires both metadata ids or neither", () => {
+    for (const bad of [
+      { metadataPaymentId: "pay_synthetic_1" },
+      { metadataAppointmentId: "appt_synthetic_1" },
+      { metadataPaymentId: " ", metadataAppointmentId: "appt_synthetic_1" },
+      { metadataPaymentId: "pay synthetic", metadataAppointmentId: "appt_synthetic_1" },
+    ]) {
+      assert.throws(() => evidence(bad), /metadata must carry both/);
+    }
+  });
+
+  it("only evidence issued by verifiedCheckoutEvidence passes the runtime check", () => {
+    const issued = evidence();
+    assert.equal(isVerifiedCheckoutEvidence(issued), true);
+    assert.equal(isVerifiedCheckoutEvidence({ ...issued }), false);
+    assert.equal(isVerifiedCheckoutEvidence(JSON.parse(JSON.stringify(issued))), false);
+    assert.equal(isVerifiedCheckoutEvidence(null), false);
+    assert.equal(isVerifiedCheckoutEvidence("cs_test_synthetic_1"), false);
+  });
+
+  it("PAYMENT_CONFIRMED records the status the Payment had before the charge", () => {
+    const scenario = input({ payment: { status: "EXPIRED" } });
+    const event = paymentDecisionEvent(decidePaymentConfirmation(scenario), scenario);
+    assert.equal(event?.type, "PAYMENT_CONFIRMED");
+    assert.equal(event?.details.previousPaymentStatus, "EXPIRED");
   });
 });

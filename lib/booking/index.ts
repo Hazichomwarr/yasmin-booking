@@ -24,15 +24,18 @@
  * - Rescheduling ......................... reschedule.ts
  * - Audit trail (append-only) ............ appointment-events.ts
  * - Payment confirmation decision ........ payment-policy.ts (pure)
+ * - Applying verified payment evidence ... payment-fulfillment.ts
  *
  * Lock order for anything that changes an existing appointment: the
- * appointment row first, then at most one BookingSlot row. Hold acquisition
- * locks only the BookingSlot. No operation holds two slot locks.
+ * appointment row first, then (payment fulfillment) its Payment row, then at
+ * most one BookingSlot row. Hold acquisition locks only the BookingSlot. No
+ * operation holds two slot locks.
  *
- * There is intentionally NO exported way to move PENDING_PAYMENT → CONFIRMED.
- * payment-policy.ts (pure, imported directly, not re-exported here) decides
- * it from verified Stripe evidence; only the payment fulfillment service
- * (YASMIN-1E.3) may execute it, under the appointment and slot locks.
+ * There is intentionally NO export here that moves PENDING_PAYMENT → CONFIRMED.
+ * payment-policy.ts decides it from verified Stripe evidence and
+ * payment-fulfillment.ts (`applyVerifiedCheckoutSession`) executes it under
+ * the appointment, payment and slot locks. Both are imported by path by the
+ * payment adapters only, never re-exported here.
  */
 
 export { BookingError, isBookingError, type BookingErrorCode } from "./errors";

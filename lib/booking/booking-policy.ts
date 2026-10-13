@@ -52,7 +52,7 @@ export function dateClosedReason(
   date: SalonDate,
   location: { id: string; timeZone: string },
   now: Date,
-): BookingClosedReason | null {
+): PlacePolicyClosedReason | null {
   const timeZone = assertValidSalonTimeZone(location.timeZone, `Location ${location.id}`);
   if (date < salonToday(timeZone, now)) return "INVALID_APPOINTMENT_DATE";
   if (!ONLINE_BOOKING_WEEKDAYS.has(salonWeekday(date))) return "ONLINE_BOOKING_CLOSED_FOR_DAY";
@@ -62,10 +62,23 @@ export function dateClosedReason(
 export function locationClosedReason(location: {
   isActive: boolean;
   acceptsOnlineBooking: boolean;
-}): BookingClosedReason | null {
+}): PlacePolicyClosedReason | null {
   return location.isActive && location.acceptsOnlineBooking ? null : "LOCATION_NOT_BOOKABLE";
 }
 
-export function slotClosedReason(slot: { isActive: boolean }): BookingClosedReason | null {
+export function slotClosedReason(slot: { isActive: boolean }): PlacePolicyClosedReason | null {
   return slot.isActive ? null : "SLOT_NOT_BOOKABLE";
+}
+
+/**
+ * The full non-capacity policy for one (location, slot, date) at `now`, in
+ * the order hold acquisition applies it: location, then date, then slot.
+ */
+export function placePolicyClosedReason(
+  location: { id: string; timeZone: string; isActive: boolean; acceptsOnlineBooking: boolean },
+  slot: { isActive: boolean },
+  date: SalonDate,
+  now: Date,
+): PlacePolicyClosedReason | null {
+  return locationClosedReason(location) ?? dateClosedReason(date, location, now) ?? slotClosedReason(slot);
 }

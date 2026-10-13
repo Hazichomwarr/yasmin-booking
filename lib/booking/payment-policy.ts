@@ -46,6 +46,12 @@ import { PAYMENT_CONFIRMATION_TRANSITION } from "./lifecycle-policy";
  * reconciliation operation, never a side effect of a duplicate webhook.
  * Duplicate deliveries are recognised by persisted provider identities, not
  * by Stripe Event IDs. Conflicting identities are reported, never replaced.
+ *
+ * Two phases: `decidePaymentBeforePlace` settles everything that needs no
+ * place facts (duplicates, unpaid sessions, inconsistencies), so the caller
+ * locks the BookingSlot only for a first receipt. `decidePaymentConfirmation`
+ * runs both phases; for any input it returns the same decision whether or not
+ * the caller used the first phase on its own.
  */
 
 declare const verifiedEvidenceBrand: unique symbol;
@@ -74,10 +80,19 @@ export type VerifiedCheckoutEvidence = {
   readonly paymentStatus: CheckoutPaymentStatus;
   /** Present exactly when paymentStatus is "paid". */
   readonly charge: Readonly<VerifiedCharge> | null;
+  /**
+   * The Payment this session was created for, from the session metadata our
+   * server set when creating it (retrieved from Stripe, not from the browser).
+   * A lookup hint only: the fulfillment service verifies it against the
+   * database before using it.
+   */
+  readonly reference: Readonly<CheckoutReference> | null;
   /** The webhook event that triggered verification; null for return-page or sweep checks. */
   readonly stripeEventId: string | null;
   readonly [verifiedEvidenceBrand]: true;
 };
+
+export type CheckoutReference = { paymentId: string; appointmentId: string };
 
 export type CheckoutEvidenceInput = {
   checkoutSessionId: string;
@@ -88,8 +103,19 @@ export type CheckoutEvidenceInput = {
   currency?: string | null;
   paidAt?: Date | null;
   refundedOrPendingCents?: number | null;
+  /** Session metadata set by our server at creation; both or neither. */
+  metadataPaymentId?: string | null;
+  metadataAppointmentId?: string | null;
   stripeEventId?: string | null;
 };
+
+/** Every evidence object this module issued; the type brand is compile-time only. */
+const issuedEvidence = new WeakSet<object>();
+
+/** Runtime check that `value` came from `verifiedCheckoutEvidence`, not a look-alike object. */
+export function isVerifiedCheckoutEvidence(value: unknown): value is VerifiedCheckoutEvidence {
+  return typeof value === "object" && value !== null && issuedEvidence.has(value);
+}
 
 const SESSION_STATUSES: ReadonlySet<string> = new Set<CheckoutSessionStatus>(["open", "complete", "expired"]);
 const PAYMENT_STATUSES: ReadonlySet<string> = new Set<CheckoutPaymentStatus>([
@@ -114,6 +140,19 @@ export function verifiedCheckoutEvidence(input: CheckoutEvidenceInput): Verified
   const stripeEventId = input.stripeEventId ?? null;
   if (stripeEventId !== null && !/^evt_\S+$/.test(stripeEventId)) fail("stripeEventId is not an Event id");
 
+  const metadataPaymentId = input.metadataPaymentId ?? null;
+  const metadataAppointmentId = input.metadataAppointmentId ?? null;
+  let reference: CheckoutReference | null = null;
+  if (metadataPaymentId !== null || metadataAppointmentId !== null) {
+    for (const value of [metadataPaymentId, metadataAppointmentId]) {
+      if (value === null || !/^\S+$/.test(value)) fail("metadata must carry both paymentId and appointmentId");
+    }
+    reference = Object.freeze({
+      paymentId: metadataPaymentId as string,
+      appointmentId: metadataAppointmentId as string,
+    });
+  }
+
   let charge: VerifiedCharge | null = null;
   if (input.paymentStatus === "paid") {
     if (input.sessionStatus !== "complete") fail("a paid session must be complete");
@@ -135,13 +174,16 @@ export function verifiedCheckoutEvidence(input: CheckoutEvidenceInput): Verified
     });
   }
 
-  return Object.freeze({
+  const evidence = Object.freeze({
     checkoutSessionId: input.checkoutSessionId,
     sessionStatus: input.sessionStatus as CheckoutSessionStatus,
     paymentStatus: input.paymentStatus as CheckoutPaymentStatus,
     charge,
+    reference,
     stripeEventId,
   }) as VerifiedCheckoutEvidence;
+  issuedEvidence.add(evidence);
+  return evidence;
 }
 
 /** The persisted Payment, as read under its row lock. */
@@ -236,9 +278,27 @@ export type PaymentConfirmationDecision =
 
 const RECEIVED_STATUSES: ReadonlySet<PaymentStatus> = new Set<PaymentStatus>(["PAID", "REFUNDED"]);
 
-export function decidePaymentConfirmation(input: PaymentConfirmationInput): PaymentConfirmationDecision {
-  const { evidence, payment, appointment, place, decidedAt } = input;
-  assertPlaceFacts(place, decidedAt);
+/** The facts that decide everything except a first receipt's place. */
+export type PlaceIndependentInput = Omit<PaymentConfirmationInput, "place" | "decidedAt">;
+
+/**
+ * Decisions that need no place facts and no decision instant.
+ * Duplicates, unpaid sessions and inconsistencies never allocate, so the
+ * caller can apply them without locking the BookingSlot.
+ */
+export type PlaceIndependentDecision = Exclude<PaymentConfirmationDecision, { kind: "confirm" | "reconcile" }>;
+
+/**
+ * The first phase of `decidePaymentConfirmation`: everything decidable from
+ * the evidence, the Payment and the Appointment alone. "place-required"
+ * means a first receipt of a verified charge: the caller must lock the
+ * appointment's BookingSlot, read the decision instant, and call
+ * `decidePaymentConfirmation` with the place facts.
+ */
+export function decidePaymentBeforePlace(
+  input: PlaceIndependentInput,
+): PlaceIndependentDecision | { kind: "place-required" } {
+  const { evidence, payment, appointment } = input;
 
   const localProblem = localRecordProblem(payment, appointment);
   if (localProblem) return inconsistent("LOCAL_RECORD_INVALID", localProblem);
@@ -304,6 +364,17 @@ export function decidePaymentConfirmation(input: PaymentConfirmationInput): Paym
 
   // First receipt of this charge (also when the Payment was FAILED or EXPIRED:
   // Stripe's verified success overrides the local guess).
+  return { kind: "place-required" };
+}
+
+export function decidePaymentConfirmation(input: PaymentConfirmationInput): PaymentConfirmationDecision {
+  const { evidence, payment, appointment, place, decidedAt } = input;
+  assertPlaceFacts(place, decidedAt);
+
+  const early = decidePaymentBeforePlace(input);
+  if (early.kind !== "place-required") return early;
+
+  const charge = evidence.charge as VerifiedCharge;
   const receipt: PaymentReceipt = {
     checkoutSessionId: evidence.checkoutSessionId,
     paymentIntentId: charge.paymentIntentId,
@@ -356,7 +427,10 @@ function confirm(
   return { kind: "confirm", method, receipt, place, transition: PAYMENT_CONFIRMATION_TRANSITION };
 }
 
-function inconsistent(problem: PaymentInconsistency, message: string): PaymentConfirmationDecision {
+function inconsistent(
+  problem: PaymentInconsistency,
+  message: string,
+): Extract<PaymentConfirmationDecision, { kind: "inconsistent" }> {
   return { kind: "inconsistent", problem, message };
 }
 
@@ -430,6 +504,7 @@ export function paymentDecisionEvent(
       type: decision.transition.event,
       details: eventDetails.paymentConfirmed({
         payment,
+        previousPaymentStatus: decision.receipt.previousStatus,
         allocatedAt: input.decidedAt,
         confirmation: decision.method,
         hold,

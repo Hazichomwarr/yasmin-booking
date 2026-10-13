@@ -114,6 +114,8 @@ export type PaymentConfirmedEventDetails = {
   fromStatus: "PENDING_PAYMENT";
   toStatus: "CONFIRMED";
   payment: PaymentEventFacts;
+  /** The Payment status before this charge was recorded (PENDING, or EXPIRED/FAILED overridden by Stripe). */
+  previousPaymentStatus: PaymentStatus;
   allocatedAt: string; // ISO instant
   confirmation: PaymentConfirmationMethod;
   hold: HoldFacts;
@@ -302,6 +304,7 @@ export const eventDetails = {
 
   paymentConfirmed: (d: {
     payment: PaymentFactsInput;
+    previousPaymentStatus: PaymentStatus;
     allocatedAt: Date;
     confirmation: PaymentConfirmationMethod;
     hold: Omit<HoldFactsInput, "paidAt">;
@@ -313,6 +316,7 @@ export const eventDetails = {
     fromStatus: "PENDING_PAYMENT",
     toStatus: "CONFIRMED",
     payment: paymentFacts(d.payment),
+    previousPaymentStatus: d.previousPaymentStatus,
     allocatedAt: instant(d.allocatedAt, "allocatedAt"),
     confirmation: d.confirmation,
     hold: holdFacts({ ...d.hold, paidAt: d.payment.paidAt }),
