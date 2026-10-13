@@ -148,6 +148,7 @@ describe("lifecycle preserves the appointment, money, payments, and history", { 
         customerNotes: "Waist length",
         preferredStylistName: "Aisha",
       });
+      // Synthetic received-and-allocated deposit (no real Stripe object).
       const payment = await prisma.payment.create({
         data: {
           appointmentId: appointment.id,
@@ -155,7 +156,9 @@ describe("lifecycle preserves the appointment, money, payments, and history", { 
           purpose: "BOOKING_DEPOSIT",
           status: "PAID",
           amountCents: 4000,
+          providerPaymentIntentId: `pi_synthetic_${appointment.id}`,
           paidAt: NOW,
+          allocatedAt: NOW,
         },
       });
       const customer = await prisma.customer.findUniqueOrThrow({ where: { id: appointment.customerId } });

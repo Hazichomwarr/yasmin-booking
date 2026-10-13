@@ -29,11 +29,28 @@ enum PaymentPurpose {
   BOOKING_DEPOSIT
 }
 
+/// Net state of one payment attempt. PAID and REFUNDED both mean money was
+/// received (paidAt is set); REFUNDED means the full amount was refunded.
 enum PaymentStatus {
   PENDING
   PAID
+  /// No money moved: Checkout could not be created, or an async payment failed.
   FAILED
   REFUNDED
+  /// No money moved: the Checkout Session expired (or can no longer be paid).
+  EXPIRED
+}
+
+/// Why a received charge has not been allocated to its appointment.
+enum PaymentReconciliationReason {
+  /// Capacity full or booking policy closed when the place was re-checked.
+  PLACE_UNAVAILABLE
+  /// The appointment was cancelled or otherwise not payable when the charge arrived.
+  APPOINTMENT_NOT_PAYABLE
+  /// Stripe's amount/currency differs from the Payment record.
+  AMOUNT_MISMATCH
+  /// The charge was (partly) refunded before it could be allocated.
+  REFUNDED_BEFORE_ALLOCATION
 }
 
 enum AppointmentEventType {
@@ -45,6 +62,9 @@ enum AppointmentEventType {
   NO_SHOW
   CUSTOMER_UPDATED
   NOTE_UPDATED
+  HOLD_EXPIRY_CHANGED
+  PAYMENT_RECEIVED_UNCONFIRMED
+  PAYMENT_REFUND_UPDATED
 }
 
 model SalonLocation {
@@ -179,23 +199,55 @@ model Appointment {
   @@index([holdExpiresAt])
 }
 
+// Payment invariants are enforced by CHECK constraints added in migration
+// 20261013120000_payment_reconciliation_foundation (Prisma cannot express
+// them): a received charge (paidAt) has a PaymentIntent and is either
+// allocated or carries a reconciliation reason; refunds stay within
+// 0..amountCents; REFUNDED means fully refunded.
+//
+// A reconciliation case is OPEN while reconciliationReason is set,
+// allocatedAt is null and status is not REFUNDED. It closes only on evidence
+// (allocation or a verified full refund), never on reconciliationNote.
+//
+// Requirements for the services built on this (YASMIN-1E.2+):
+// - Stripe idempotency keys are retained for a limited time: an uncertain
+//   Checkout creation is replayed only until providerCheckoutExpiresAt, then
+//   finalized; never replayed indefinitely.
+// - Refund snapshot ordering must not rely solely on request-start
+//   timestamps (refundsSyncedAt is a guard, not proof of recency).
+// - Payment confirmation locks the appointment and its destination slot.
+// - No payment confirmation may bypass the capacity policy.
+// - A paid but unallocated charge must remain discoverable.
 model Payment {
-  id                        String          @id @default(cuid())
+  id                        String                       @id @default(cuid())
   appointmentId             String
   provider                  PaymentProvider
   purpose                   PaymentPurpose
-  status                    PaymentStatus   @default(PENDING)
+  status                    PaymentStatus                @default(PENDING)
   amountCents               Int
-  currency                  String          @default("usd")
-  providerCheckoutSessionId String?         @unique
-  providerPaymentIntentId   String?         @unique
+  currency                  String                       @default("usd")
+  providerCheckoutSessionId String?                      @unique
+  providerPaymentIntentId   String?                      @unique
+  /// The Checkout Session expiry fixed when this attempt was created.
+  providerCheckoutExpiresAt DateTime?
   paidAt                    DateTime?
-  createdAt                 DateTime        @default(now())
-  updatedAt                 DateTime        @updatedAt
-  appointment               Appointment     @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  /// Set once, when this charge confirmed its appointment. Never cleared.
+  allocatedAt               DateTime?
+  /// Sum of SUCCEEDED Stripe refunds, from the latest verified snapshot.
+  refundedAmountCents       Int                          @default(0)
+  refundsSyncedAt           DateTime?
+  reconciliationReason      PaymentReconciliationReason?
+  /// Informational only. Never evidence of allocation or refund.
+  reconciliationNote        String?
+  createdAt                 DateTime                     @default(now())
+  updatedAt                 DateTime                     @updatedAt
+  appointment               Appointment                  @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
 
+  /// One deposit attempt per appointment.
+  @@unique([appointmentId, purpose])
   @@index([appointmentId])
   @@index([status])
+  @@index([reconciliationReason])
 }
 
 model AppointmentEvent {
