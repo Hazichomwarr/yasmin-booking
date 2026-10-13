@@ -7,7 +7,7 @@ import { BookingError } from "./errors";
  * changes are allowed.
  *
  *   PENDING_PAYMENT ──cancel──────────────▶ CANCELLED
- *   PENDING_PAYMENT ──(verified payment, YASMIN-1E only)──▶ CONFIRMED
+ *   PENDING_PAYMENT ──(verified payment)──▶ CONFIRMED   PAYMENT_CONFIRMATION_TRANSITION
  *   CONFIRMED ───────cancel──────────────▶ CANCELLED
  *   CONFIRMED ───────complete────────────▶ COMPLETED
  *   CONFIRMED ───────markNoShow──────────▶ NO_SHOW
@@ -15,8 +15,10 @@ import { BookingError } from "./errors";
  *
  * COMPLETED, CANCELLED and NO_SHOW are terminal: nothing leaves them.
  *
- * There is deliberately NO command here for PENDING_PAYMENT → CONFIRMED.
- * That transition belongs to verified-payment orchestration (YASMIN-1E).
+ * There is deliberately NO command for PENDING_PAYMENT → CONFIRMED. The
+ * transition is described by PAYMENT_CONFIRMATION_TRANSITION, is decided only
+ * by payment-policy.ts from verified payment evidence, and is executed only by
+ * the payment fulfillment service (YASMIN-1E.3).
  *
  * Idempotency: repeating a command whose target status the appointment is
  * already in is a no-op (no write, no event). Any other command from a
@@ -36,6 +38,16 @@ export const LIFECYCLE_TRANSITIONS: Readonly<Record<LifecycleCommand, Transition
   complete: { from: ["CONFIRMED"], to: "COMPLETED", event: "COMPLETED" },
   markNoShow: { from: ["CONFIRMED"], to: "NO_SHOW", event: "NO_SHOW" },
 };
+
+/**
+ * The only way into CONFIRMED from a hold. Not a LifecycleCommand: it is
+ * applied solely when payment-policy.ts returns a "confirm" decision.
+ */
+export const PAYMENT_CONFIRMATION_TRANSITION = {
+  from: "PENDING_PAYMENT",
+  to: "CONFIRMED",
+  event: "PAYMENT_CONFIRMED",
+} as const satisfies { from: AppointmentStatus; to: AppointmentStatus; event: AppointmentEventType };
 
 export const TERMINAL_STATUSES: ReadonlySet<AppointmentStatus> = new Set<AppointmentStatus>([
   "COMPLETED",

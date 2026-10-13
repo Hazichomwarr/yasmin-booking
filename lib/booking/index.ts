@@ -23,16 +23,16 @@
  * - Cancel / complete / no-show / notes .. lifecycle.ts
  * - Rescheduling ......................... reschedule.ts
  * - Audit trail (append-only) ............ appointment-events.ts
+ * - Payment confirmation decision ........ payment-policy.ts (pure)
  *
  * Lock order for anything that changes an existing appointment: the
  * appointment row first, then at most one BookingSlot row. Hold acquisition
  * locks only the BookingSlot. No operation holds two slot locks.
  *
  * There is intentionally NO exported way to move PENDING_PAYMENT → CONFIRMED.
- * That transition will be added by verified-payment orchestration (YASMIN-1E).
- *
- * For YASMIN-1E (Stripe): see the hold-expiry race documented in the 1C
- * report — a payment can complete after its hold has logically expired.
+ * payment-policy.ts (pure, imported directly, not re-exported here) decides
+ * it from verified Stripe evidence; only the payment fulfillment service
+ * (YASMIN-1E.3) may execute it, under the appointment and slot locks.
  */
 
 export { BookingError, isBookingError, type BookingErrorCode } from "./errors";

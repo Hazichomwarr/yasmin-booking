@@ -31,6 +31,9 @@ export type BookingClosedReason = Extract<
   | "CAPACITY_FULL"
 >;
 
+/** Why a slot is not bookable on a date apart from capacity (location, date or slot policy). */
+export type PlacePolicyClosedReason = Exclude<BookingClosedReason, "CAPACITY_FULL">;
+
 /**
  * Date policy, evaluated in the location's own calendar.
  *

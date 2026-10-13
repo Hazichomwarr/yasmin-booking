@@ -1,7 +1,14 @@
-import type { AppointmentEventType, AppointmentStatus, Prisma } from "@prisma/client";
+import type {
+  AppointmentEventType,
+  AppointmentStatus,
+  PaymentReconciliationReason,
+  PaymentStatus,
+  Prisma,
+} from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 
+import type { PlacePolicyClosedReason } from "./booking-policy";
 import { BookingError } from "./errors";
 import type { BookingPriceSnapshot } from "./pricing";
 
@@ -61,11 +68,199 @@ export type FieldChangedEventDetails = {
   after: string | null;
 };
 
-export type AppointmentEventDetails =
-  | CreatedEventDetails
-  | StatusChangedEventDetails
-  | RescheduledEventDetails
-  | FieldChangedEventDetails;
+/**
+ * Payment facts as verified with Stripe. Instants are ISO strings; amounts
+ * are integer minor units with a lowercase ISO 4217 currency.
+ */
+export type PaymentEventFacts = {
+  paymentId: string;
+  checkoutSessionId: string;
+  paymentIntentId: string;
+  amountCents: number;
+  currency: string;
+  paidAt: string; // ISO instant (Stripe charge time)
+};
+
+/** Hold facts at the decision instant. */
+export type HoldFacts = {
+  expiresAt: string | null; // ISO instant
+  activeAtDecision: boolean;
+  /** Informational only — never used to grant a place. Null when there was no hold expiry. */
+  paidBeforeExpiry: boolean | null;
+};
+
+/** Capacity of the appointment's (slot, date), read under the slot lock. */
+export type CapacityFacts = {
+  configured: number;
+  consumedByOthers: number;
+};
+
+export type HoldExpiryChangeReason = "checkout-started" | "checkout-creation-failed";
+
+export type HoldExpiryChangedEventDetails = {
+  schemaVersion: 1;
+  reason: HoldExpiryChangeReason;
+  before: string | null; // ISO instant
+  after: string | null; // ISO instant
+  paymentId: string;
+  checkoutExpiresAt: string | null; // ISO instant
+  decidedAt: string; // ISO instant
+};
+
+export type PaymentConfirmationMethod = "within-active-hold" | "reacquired-after-hold-expiry";
+
+export type PaymentConfirmedEventDetails = {
+  schemaVersion: 1;
+  fromStatus: "PENDING_PAYMENT";
+  toStatus: "CONFIRMED";
+  payment: PaymentEventFacts;
+  allocatedAt: string; // ISO instant
+  confirmation: PaymentConfirmationMethod;
+  hold: HoldFacts;
+  capacity: CapacityFacts;
+  decidedAt: string; // ISO instant
+  stripeEventId: string | null;
+};
+
+export type PaymentReceivedUnconfirmedEventDetails = {
+  schemaVersion: 1;
+  /** What Stripe verified (may differ from `recorded` when reason is AMOUNT_MISMATCH). */
+  payment: PaymentEventFacts;
+  /** What the Payment record expected. */
+  recorded: { amountCents: number; currency: string };
+  previousPaymentStatus: PaymentStatus;
+  reason: PaymentReconciliationReason;
+  appointmentStatus: AppointmentStatus;
+  hold: HoldFacts;
+  capacity: CapacityFacts;
+  /** Booking policy at the decision instant, when it was consulted and closed. */
+  bookingPolicyClosedReason: PlacePolicyClosedReason | null;
+  decidedAt: string; // ISO instant
+  stripeEventId: string | null;
+};
+
+export type StripeRefundStatus = "pending" | "requires_action" | "succeeded" | "failed" | "canceled";
+
+export type PaymentRefundUpdatedEventDetails = {
+  schemaVersion: 1;
+  paymentId: string;
+  before: { refundedAmountCents: number; status: PaymentStatus };
+  after: { refundedAmountCents: number; status: PaymentStatus };
+  /** The verified Stripe refunds the new total was computed from. */
+  refunds: { id: string; amountCents: number; status: StripeRefundStatus }[];
+  decidedAt: string; // ISO instant
+  stripeEventId: string | null;
+};
+
+/** Requires every AppointmentEventType to have a details contract. */
+type DetailsForEveryEventType<T extends Record<AppointmentEventType, unknown>> = T;
+
+/** The details contract of each event type. */
+export type AppointmentEventDetailsByType = DetailsForEveryEventType<{
+  CREATED: CreatedEventDetails;
+  PAYMENT_CONFIRMED: PaymentConfirmedEventDetails;
+  RESCHEDULED: RescheduledEventDetails;
+  CANCELLED: StatusChangedEventDetails;
+  COMPLETED: StatusChangedEventDetails;
+  NO_SHOW: StatusChangedEventDetails;
+  /** No writer and no contract yet; defined when one is added. */
+  CUSTOMER_UPDATED: never;
+  NOTE_UPDATED: FieldChangedEventDetails;
+  HOLD_EXPIRY_CHANGED: HoldExpiryChangedEventDetails;
+  PAYMENT_RECEIVED_UNCONFIRMED: PaymentReceivedUnconfirmedEventDetails;
+  PAYMENT_REFUND_UPDATED: PaymentRefundUpdatedEventDetails;
+}>;
+
+export type AppointmentEventDetails = AppointmentEventDetailsByType[AppointmentEventType];
+
+const STRIPE_REFUND_STATUSES: ReadonlySet<string> = new Set<StripeRefundStatus>([
+  "pending",
+  "requires_action",
+  "succeeded",
+  "failed",
+  "canceled",
+]);
+
+/** Payment payloads are history: malformed facts are refused, not stored. */
+function instant(value: Date, label: string): string {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new Error(`Event details: ${label} must be a valid Date.`);
+  }
+  return value.toISOString();
+}
+
+function optionalInstant(value: Date | null, label: string): string | null {
+  return value === null ? null : instant(value, label);
+}
+
+function cents(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Event details: ${label} must be a non-negative integer number of cents.`);
+  }
+  return value;
+}
+
+function currencyCode(value: string): string {
+  if (!/^[a-z]{3}$/.test(value)) {
+    throw new Error("Event details: currency must be a lowercase three-letter ISO code.");
+  }
+  return value;
+}
+
+function identifier(value: string, label: string): string {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
+    throw new Error(`Event details: ${label} must be a non-empty identifier.`);
+  }
+  return value;
+}
+
+function optionalIdentifier(value: string | null, label: string): string | null {
+  return value === null ? null : identifier(value, label);
+}
+
+export type PaymentFactsInput = {
+  paymentId: string;
+  checkoutSessionId: string;
+  paymentIntentId: string;
+  amountCents: number;
+  currency: string;
+  paidAt: Date;
+};
+
+function paymentFacts(p: PaymentFactsInput): PaymentEventFacts {
+  return {
+    paymentId: identifier(p.paymentId, "paymentId"),
+    checkoutSessionId: identifier(p.checkoutSessionId, "checkoutSessionId"),
+    paymentIntentId: identifier(p.paymentIntentId, "paymentIntentId"),
+    amountCents: cents(p.amountCents, "amountCents"),
+    currency: currencyCode(p.currency),
+    paidAt: instant(p.paidAt, "paidAt"),
+  };
+}
+
+export type HoldFactsInput = { expiresAt: Date | null; activeAtDecision: boolean; paidAt: Date };
+
+function holdFacts(h: HoldFactsInput): HoldFacts {
+  return {
+    expiresAt: optionalInstant(h.expiresAt, "hold.expiresAt"),
+    activeAtDecision: h.activeAtDecision,
+    paidBeforeExpiry: h.expiresAt === null ? null : h.paidAt.getTime() < h.expiresAt.getTime(),
+  };
+}
+
+function count(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Event details: ${label} must be a non-negative integer.`);
+  }
+  return value;
+}
+
+function capacityFacts(c: CapacityFacts): CapacityFacts {
+  return {
+    configured: count(c.configured, "capacity.configured"),
+    consumedByOthers: count(c.consumedByOthers, "capacity.consumedByOthers"),
+  };
+}
 
 export const eventDetails = {
   created: (d: Omit<CreatedEventDetails, "schemaVersion">): CreatedEventDetails => ({
@@ -87,6 +282,104 @@ export const eventDetails = {
     before: string | null,
     after: string | null,
   ): FieldChangedEventDetails => ({ schemaVersion: SCHEMA_VERSION, field, before, after }),
+
+  holdExpiryChanged: (d: {
+    reason: HoldExpiryChangeReason;
+    before: Date | null;
+    after: Date | null;
+    paymentId: string;
+    checkoutExpiresAt: Date | null;
+    decidedAt: Date;
+  }): HoldExpiryChangedEventDetails => ({
+    schemaVersion: SCHEMA_VERSION,
+    reason: d.reason,
+    before: optionalInstant(d.before, "before"),
+    after: optionalInstant(d.after, "after"),
+    paymentId: identifier(d.paymentId, "paymentId"),
+    checkoutExpiresAt: optionalInstant(d.checkoutExpiresAt, "checkoutExpiresAt"),
+    decidedAt: instant(d.decidedAt, "decidedAt"),
+  }),
+
+  paymentConfirmed: (d: {
+    payment: PaymentFactsInput;
+    allocatedAt: Date;
+    confirmation: PaymentConfirmationMethod;
+    hold: Omit<HoldFactsInput, "paidAt">;
+    capacity: CapacityFacts;
+    decidedAt: Date;
+    stripeEventId: string | null;
+  }): PaymentConfirmedEventDetails => ({
+    schemaVersion: SCHEMA_VERSION,
+    fromStatus: "PENDING_PAYMENT",
+    toStatus: "CONFIRMED",
+    payment: paymentFacts(d.payment),
+    allocatedAt: instant(d.allocatedAt, "allocatedAt"),
+    confirmation: d.confirmation,
+    hold: holdFacts({ ...d.hold, paidAt: d.payment.paidAt }),
+    capacity: capacityFacts(d.capacity),
+    decidedAt: instant(d.decidedAt, "decidedAt"),
+    stripeEventId: optionalIdentifier(d.stripeEventId, "stripeEventId"),
+  }),
+
+  paymentReceivedUnconfirmed: (d: {
+    payment: PaymentFactsInput;
+    recorded: { amountCents: number; currency: string };
+    previousPaymentStatus: PaymentStatus;
+    reason: PaymentReconciliationReason;
+    appointmentStatus: AppointmentStatus;
+    hold: Omit<HoldFactsInput, "paidAt">;
+    capacity: CapacityFacts;
+    bookingPolicyClosedReason: PlacePolicyClosedReason | null;
+    decidedAt: Date;
+    stripeEventId: string | null;
+  }): PaymentReceivedUnconfirmedEventDetails => ({
+    schemaVersion: SCHEMA_VERSION,
+    payment: paymentFacts(d.payment),
+    recorded: {
+      amountCents: cents(d.recorded.amountCents, "recorded.amountCents"),
+      currency: currencyCode(d.recorded.currency),
+    },
+    previousPaymentStatus: d.previousPaymentStatus,
+    reason: d.reason,
+    appointmentStatus: d.appointmentStatus,
+    hold: holdFacts({ ...d.hold, paidAt: d.payment.paidAt }),
+    capacity: capacityFacts(d.capacity),
+    bookingPolicyClosedReason: d.bookingPolicyClosedReason,
+    decidedAt: instant(d.decidedAt, "decidedAt"),
+    stripeEventId: optionalIdentifier(d.stripeEventId, "stripeEventId"),
+  }),
+
+  paymentRefundUpdated: (d: {
+    paymentId: string;
+    before: { refundedAmountCents: number; status: PaymentStatus };
+    after: { refundedAmountCents: number; status: PaymentStatus };
+    refunds: { id: string; amountCents: number; status: StripeRefundStatus }[];
+    decidedAt: Date;
+    stripeEventId: string | null;
+  }): PaymentRefundUpdatedEventDetails => ({
+    schemaVersion: SCHEMA_VERSION,
+    paymentId: identifier(d.paymentId, "paymentId"),
+    before: {
+      refundedAmountCents: cents(d.before.refundedAmountCents, "before.refundedAmountCents"),
+      status: d.before.status,
+    },
+    after: {
+      refundedAmountCents: cents(d.after.refundedAmountCents, "after.refundedAmountCents"),
+      status: d.after.status,
+    },
+    refunds: d.refunds.map((refund, i) => {
+      if (!STRIPE_REFUND_STATUSES.has(refund.status)) {
+        throw new Error(`Event details: refunds[${i}].status is not a Stripe refund status.`);
+      }
+      return {
+        id: identifier(refund.id, `refunds[${i}].id`),
+        amountCents: cents(refund.amountCents, `refunds[${i}].amountCents`),
+        status: refund.status,
+      };
+    }),
+    decidedAt: instant(d.decidedAt, "decidedAt"),
+    stripeEventId: optionalIdentifier(d.stripeEventId, "stripeEventId"),
+  }),
 };
 
 /**
@@ -96,11 +389,11 @@ export const eventDetails = {
  * transaction that inserts the appointment). See `eventTimestamp` for how the
  * timestamp is chosen.
  */
-export async function appendAppointmentEvent(
+export async function appendAppointmentEvent<T extends AppointmentEventType>(
   tx: Prisma.TransactionClient,
   appointmentId: string,
-  type: AppointmentEventType,
-  details: AppointmentEventDetails,
+  type: T,
+  details: AppointmentEventDetailsByType[T],
 ): Promise<void> {
   await tx.appointmentEvent.create({
     data: {
