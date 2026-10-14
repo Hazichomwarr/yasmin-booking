@@ -1,9 +1,11 @@
 import { Prisma } from "@prisma/client";
 
 import type { StripeCheckoutAdapter } from "@/lib/stripe/checkout";
+import { stripeCheckoutAdapter } from "@/lib/stripe/checkout";
 import { prisma } from "@/lib/prisma";
 
 import { appendAppointmentEvent, eventDetails } from "./appointment-events";
+import { assertBookingAccessUnderLock, resolveBookingAccess, type BookingAccessGrant } from "./access";
 import { lockAppointment } from "./appointments";
 import { dateClosedReason, locationClosedReason, slotClosedReason } from "./booking-policy";
 import { countConsumedCapacity, lockBookingSlotCapacity, remainingCapacity } from "./capacity";
@@ -42,8 +44,9 @@ export async function startBookingDepositCheckout(
   appointmentId: string,
   adapter: StripeCheckoutAdapter,
   clock: CheckoutClock = postgresCheckoutClock,
+  grant?: BookingAccessGrant,
 ): Promise<CheckoutStartResult> {
-  const prepared = await prepareCheckout(appointmentId, clock);
+  const prepared = await prepareCheckout(appointmentId, clock, grant);
   if (prepared.kind === "existing") {
     const session = await adapter.retrieveDepositCheckout(prepared.checkoutSessionId);
     if (!sessionMatchesPayment(session, prepared)) {
@@ -95,6 +98,16 @@ export async function startBookingDepositCheckout(
   return { kind: "ready", paymentId: prepared.checkout.paymentId, checkoutUrl: session.url, expiresAt: session.expiresAt };
 }
 
+/** Internal customer-authorized entry point. The token alone selects the appointment. */
+export async function startAuthorizedBookingCheckout(
+  accessToken: unknown,
+  dependencies: { adapter?: StripeCheckoutAdapter; clock?: CheckoutClock; afterAccessResolved?: () => Promise<void> } = {},
+): Promise<CheckoutStartResult> {
+  const grant = await resolveBookingAccess(accessToken);
+  await dependencies.afterAccessResolved?.();
+  return startBookingDepositCheckout(grant.appointmentId, dependencies.adapter ?? stripeCheckoutAdapter(), dependencies.clock ?? postgresCheckoutClock, grant);
+}
+
 function sessionMatchesPayment(
   session: Awaited<ReturnType<StripeCheckoutAdapter["createDepositCheckout"]>>,
   payment: { paymentId: string; appointmentId: string; amountCents: number; expiresAt: Date },
@@ -107,9 +120,10 @@ function sessionMatchesPayment(
     && session.metadata.appointmentId === payment.appointmentId;
 }
 
-async function prepareCheckout(appointmentId: string, clock: CheckoutClock): Promise<{ kind: "prepared"; checkout: PreparedCheckout } | { kind: "existing"; paymentId: string; appointmentId: string; checkoutSessionId: string; amountCents: number; expiresAt: Date } | CheckoutStartResult> {
+async function prepareCheckout(appointmentId: string, clock: CheckoutClock, grant?: BookingAccessGrant): Promise<{ kind: "prepared"; checkout: PreparedCheckout } | { kind: "existing"; paymentId: string; appointmentId: string; checkoutSessionId: string; amountCents: number; expiresAt: Date } | CheckoutStartResult> {
   return prisma.$transaction(async (tx) => {
     const appointment = await lockAppointment(tx, appointmentId);
+    if (grant) await assertBookingAccessUnderLock(tx, grant);
     if (appointment.status !== "PENDING_PAYMENT" || !appointment.holdExpiresAt) throw new BookingError("APPOINTMENT_NOT_EDITABLE", "Appointment is not eligible to start checkout.");
     const location = await tx.salonLocation.findUniqueOrThrow({ where: { id: appointment.locationId }, select: { id: true, name: true, timeZone: true, isActive: true, acceptsOnlineBooking: true } });
     await tx.$queryRaw<{ id: string }[]>`

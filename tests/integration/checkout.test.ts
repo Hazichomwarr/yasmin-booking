@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 
 import { acquireBookingHold } from "@/lib/booking";
 import { cancelAppointment } from "@/lib/booking";
-import { startBookingDepositCheckout, type CheckoutClock } from "@/lib/booking/checkout";
+import { startAuthorizedBookingCheckout, startBookingDepositCheckout, type CheckoutClock } from "@/lib/booking/checkout";
+import { issueBookingAccess, revokeBookingAccess } from "@/lib/booking/access";
+import { BookingAccessError } from "@/lib/booking/errors";
 import { applyVerifiedCheckoutSession } from "@/lib/booking/payment-fulfillment";
 import { verifiedCheckoutEvidence } from "@/lib/booking/payment-policy";
 import { prisma } from "@/lib/prisma";
@@ -299,6 +301,73 @@ describe("checkout initiation", { skip: integrationSkip }, () => {
     const result = await startBookingDepositCheckout(appointment.id, stripe.adapter, fixedClock(now));
     assert.equal(result.kind, "ready");
     assert.equal(stripe.calls(), 1);
+  });
+
+  it("starts Checkout only from an issued booking-access token", async () => {
+    const hold = await heldAppointment();
+    const access = await prisma.$transaction((tx) => issueBookingAccess(tx, hold.appointmentId));
+    const stripe = stripeDouble();
+    const result = await startAuthorizedBookingCheckout(access.token, { adapter: stripe.adapter });
+    assert.equal(result.kind, "ready"); assert.equal(stripe.calls(), 1);
+    await assert.rejects(startAuthorizedBookingCheckout("invalid", { adapter: stripe.adapter }));
+  });
+
+  it("rejects unknown, malformed, missing, expired, boundary-expired, revoked, and unissued credentials without writes", async () => {
+    const cases: Array<{ token: unknown; prepare?: (id: string) => Promise<void> }> = [
+      { token: "A".repeat(43) }, { token: "malformed" }, { token: undefined },
+      { token: "later" }, { token: "boundary" }, { token: "revoked" }, { token: "unissued" },
+    ];
+    for (let index = 0; index < cases.length; index += 1) {
+      const hold = await heldAppointment(); const stripe = stripeDouble(); let token = cases[index].token;
+      if (index >= 3 && index <= 5) {
+        const access = await prisma.$transaction((tx) => issueBookingAccess(tx, hold.appointmentId)); token = access.token;
+        if (index === 3 || index === 4) { const expiry = new Date(Date.now() - (index === 3 ? 1_000 : 0)); await prisma.appointment.update({ where: { id: hold.appointmentId }, data: { accessTokenIssuedAt: new Date(expiry.getTime() - 24 * 60 * 60_000), accessTokenExpiresAt: expiry } }); }
+        if (index === 5) await revokeBookingAccess({ appointmentId: hold.appointmentId, reason: "customer-request", actorId: "test-admin" });
+      }
+      const before = await prisma.appointment.findUniqueOrThrow({ where: { id: hold.appointmentId } });
+      await assert.rejects(startAuthorizedBookingCheckout(token, { adapter: stripe.adapter }), BookingAccessError);
+      const after = await prisma.appointment.findUniqueOrThrow({ where: { id: hold.appointmentId } });
+      assert.equal(await prisma.payment.count({ where: { appointmentId: hold.appointmentId } }), 0); assert.equal(await prisma.appointmentEvent.count({ where: { appointmentId: hold.appointmentId, type: "HOLD_EXPIRY_CHANGED" } }), 0); assert.equal(stripe.calls(), 0); assert.equal(after.status, before.status); assert.equal(after.holdExpiresAt?.getTime(), before.holdExpiresAt?.getTime());
+    }
+  });
+
+  it("keeps booking-access tokens isolated to their own appointments", async () => {
+    const a = await heldAppointment(); const b = await heldAppointment();
+    const [accessA, accessB] = await prisma.$transaction(async (tx) => [await issueBookingAccess(tx, a.appointmentId), await issueBookingAccess(tx, b.appointmentId)]);
+    const stripe = stripeDouble();
+    const result = await startAuthorizedBookingCheckout(accessA.token, { adapter: stripe.adapter });
+    assert.equal(result.kind, "ready"); assert.equal(await prisma.payment.count({ where: { appointmentId: a.appointmentId } }), 1); assert.equal(await prisma.payment.count({ where: { appointmentId: b.appointmentId } }), 0);
+    assert.notEqual(accessA.token, accessB.token);
+  });
+  it("rejects a credential revoked after resolution and before the locked checkpoint", async () => {
+    const hold = await heldAppointment(); const access = await prisma.$transaction((tx) => issueBookingAccess(tx, hold.appointmentId)); const stripe = stripeDouble();
+    let resolved!: () => void; const resolvedPromise = new Promise<void>((resolve) => { resolved = resolve; }); let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    const starting = startAuthorizedBookingCheckout(access.token, { adapter: stripe.adapter, afterAccessResolved: async () => { resolved(); await gate; } });
+    await resolvedPromise;
+    await revokeBookingAccess({ appointmentId: hold.appointmentId, reason: "customer-request", actorId: "test-admin" });
+    release(); await assert.rejects(starting, BookingAccessError);
+    assert.equal(await prisma.payment.count({ where: { appointmentId: hold.appointmentId } }), 0); assert.equal(await prisma.appointmentEvent.count({ where: { appointmentId: hold.appointmentId, type: "HOLD_EXPIRY_CHANGED" } }), 0); assert.equal(stripe.calls(), 0); assert.equal(await prisma.appointmentEvent.count({ where: { appointmentId: hold.appointmentId, type: "ACCESS_REVOKED" } }), 1);
+  });
+  it("serializes two authorized Checkout starts to one payment and provider creation", async () => {
+    const hold = await heldAppointment(); const access = await prisma.$transaction((tx) => issueBookingAccess(tx, hold.appointmentId)); const stripe = stripeDouble();
+    const outcomes = await Promise.all([startAuthorizedBookingCheckout(access.token, { adapter: stripe.adapter }), startAuthorizedBookingCheckout(access.token, { adapter: stripe.adapter })]);
+    assert.equal(await prisma.payment.count({ where: { appointmentId: hold.appointmentId } }), 1); assert.equal(await prisma.appointmentEvent.count({ where: { appointmentId: hold.appointmentId, type: "HOLD_EXPIRY_CHANGED" } }), 1); assert.equal(stripe.calls(), 1); assert.deepEqual(outcomes.map((x) => x.kind).sort(), ["ambiguous", "ready"]);
+  });
+  it("rejects cancelled booking state after authorized token resolution", async () => {
+    const hold = await heldAppointment(); const access = await prisma.$transaction((tx) => issueBookingAccess(tx, hold.appointmentId)); const stripe = stripeDouble(); let resume!: () => void; const gate = new Promise<void>((resolve) => { resume = resolve; }); let reached!: () => void; const reachedGate = new Promise<void>((resolve) => { reached = resolve; });
+    const starting = startAuthorizedBookingCheckout(access.token, { adapter: stripe.adapter, afterAccessResolved: async () => { reached(); await gate; } }); await reachedGate;
+    await cancelAppointment(hold.appointmentId); resume(); await assert.rejects(starting, /not eligible/);
+    assert.equal(await prisma.payment.count({ where: { appointmentId: hold.appointmentId } }), 0); assert.equal(stripe.calls(), 0); assert.equal(await prisma.appointmentEvent.count({ where: { appointmentId: hold.appointmentId, type: "HOLD_EXPIRY_CHANGED" } }), 0);
+  });
+  it("preserves verified fulfillment when authorized Checkout resumes after access resolution", async () => {
+    const hold = await heldAppointment(); const firstStripe = stripeDouble(); const started = await startBookingDepositCheckout(hold.appointmentId, firstStripe.adapter); assert.equal(started.kind, "ready");
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { appointmentId_purpose: { appointmentId: hold.appointmentId, purpose: "BOOKING_DEPOSIT" } } }); const access = await prisma.$transaction((tx) => issueBookingAccess(tx, hold.appointmentId));
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; }); let reached!: () => void; const reachedGate = new Promise<void>((resolve) => { reached = resolve; }); const resumedStripe = stripeDouble();
+    const waiting = startAuthorizedBookingCheckout(access.token, { adapter: resumedStripe.adapter, afterAccessResolved: async () => { reached(); await gate; } }); await reachedGate;
+    await applyVerifiedCheckoutSession(verifiedCheckoutEvidence({ checkoutSessionId: payment.providerCheckoutSessionId!, sessionStatus: "complete", paymentStatus: "paid", paymentIntentId: `pi_authorized_${payment.id}`, amountCents: payment.amountCents, currency: "usd", paidAt: new Date(), metadataPaymentId: payment.id, metadataAppointmentId: hold.appointmentId }));
+    release(); await assert.rejects(waiting, /not eligible/);
+    const [appointment, after, events] = await Promise.all([prisma.appointment.findUniqueOrThrow({ where: { id: hold.appointmentId } }), prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }), prisma.appointmentEvent.findMany({ where: { appointmentId: hold.appointmentId } })]);
+    assert.equal(appointment.status, "CONFIRMED"); assert.equal(after.status, "PAID"); assert.ok(after.allocatedAt); assert.equal(await prisma.payment.count({ where: { appointmentId: hold.appointmentId } }), 1); assert.equal(resumedStripe.calls(), 0); assert.equal(events.filter((event) => event.type === "HOLD_EXPIRY_CHANGED").length, 1); assert.equal(events.filter((event) => event.type === "PAYMENT_CONFIRMED").length, 1);
   });
 
   it("rejects 59 seconds remaining before Payment, event, or Stripe", async () => {
