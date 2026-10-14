@@ -154,6 +154,28 @@ export type PaymentRefundUpdatedEventDetails = {
   stripeEventId: string | null;
 };
 
+export type BookingAccessRevocationReason =
+  /** The token may have been exposed (shared link, compromised device, …). */
+  | "suspected-compromise"
+  /** The customer asked for the access to be withdrawn. */
+  | "customer-request"
+  /** Any other deliberate staff decision. */
+  | "administrative";
+
+/**
+ * A booking-access token was revoked. Identifies WHICH credential by its
+ * issue/expiry instants; never the token or its hash.
+ */
+export type AccessRevokedEventDetails = {
+  schemaVersion: 1;
+  reason: BookingAccessRevocationReason;
+  /** Who revoked it (e.g. an AdminUser id). Not a foreign key: history outlives accounts. */
+  actorId: string;
+  tokenIssuedAt: string; // ISO instant
+  tokenExpiresAt: string; // ISO instant
+  revokedAt: string; // ISO instant
+};
+
 /** Requires every AppointmentEventType to have a details contract. */
 type DetailsForEveryEventType<T extends Record<AppointmentEventType, unknown>> = T;
 
@@ -171,6 +193,7 @@ export type AppointmentEventDetailsByType = DetailsForEveryEventType<{
   HOLD_EXPIRY_CHANGED: HoldExpiryChangedEventDetails;
   PAYMENT_RECEIVED_UNCONFIRMED: PaymentReceivedUnconfirmedEventDetails;
   PAYMENT_REFUND_UPDATED: PaymentRefundUpdatedEventDetails;
+  ACCESS_REVOKED: AccessRevokedEventDetails;
 }>;
 
 export type AppointmentEventDetails = AppointmentEventDetailsByType[AppointmentEventType];
@@ -181,6 +204,12 @@ const STRIPE_REFUND_STATUSES: ReadonlySet<string> = new Set<StripeRefundStatus>(
   "succeeded",
   "failed",
   "canceled",
+]);
+
+const ACCESS_REVOCATION_REASONS: ReadonlySet<string> = new Set<BookingAccessRevocationReason>([
+  "suspected-compromise",
+  "customer-request",
+  "administrative",
 ]);
 
 /** Payment payloads are history: malformed facts are refused, not stored. */
@@ -352,6 +381,26 @@ export const eventDetails = {
     decidedAt: instant(d.decidedAt, "decidedAt"),
     stripeEventId: optionalIdentifier(d.stripeEventId, "stripeEventId"),
   }),
+
+  accessRevoked: (d: {
+    reason: BookingAccessRevocationReason;
+    actorId: string;
+    tokenIssuedAt: Date;
+    tokenExpiresAt: Date;
+    revokedAt: Date;
+  }): AccessRevokedEventDetails => {
+    if (!ACCESS_REVOCATION_REASONS.has(d.reason)) {
+      throw new Error("Event details: reason is not a booking-access revocation reason.");
+    }
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      reason: d.reason,
+      actorId: identifier(d.actorId, "actorId"),
+      tokenIssuedAt: instant(d.tokenIssuedAt, "tokenIssuedAt"),
+      tokenExpiresAt: instant(d.tokenExpiresAt, "tokenExpiresAt"),
+      revokedAt: instant(d.revokedAt, "revokedAt"),
+    };
+  },
 
   paymentRefundUpdated: (d: {
     paymentId: string;

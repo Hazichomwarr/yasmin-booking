@@ -26,6 +26,7 @@
  * - Payment confirmation decision ........ payment-policy.ts (pure)
  * - Applying verified payment evidence ... payment-fulfillment.ts
  * - Unapplicable payment evidence ....... payment-exceptions.ts (durable record + webhook contract)
+ * - Customer booking access (internal) .. access.ts (token issue/resolve/revoke; imported by path)
  *
  * Lock order for anything that changes an existing appointment: the
  * appointment row first, then (payment fulfillment) its Payment row, then at
@@ -39,7 +40,14 @@
  * payment adapters only, never re-exported here.
  */
 
-export { BookingError, isBookingError, type BookingErrorCode } from "./errors";
+export {
+  BookingAccessError,
+  BookingError,
+  isBookingAccessError,
+  isBookingError,
+  type BookingAccessDenialReason,
+  type BookingErrorCode,
+} from "./errors";
 
 export {
   assertValidSalonTimeZone,

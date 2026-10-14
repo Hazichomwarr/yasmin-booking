@@ -65,6 +65,7 @@ enum AppointmentEventType {
   HOLD_EXPIRY_CHANGED
   PAYMENT_RECEIVED_UNCONFIRMED
   PAYMENT_REFUND_UPDATED
+  ACCESS_REVOKED
 }
 
 model SalonLocation {
@@ -184,6 +185,15 @@ model Appointment {
   totalPriceCents       Int
   depositAmountCents    Int
   balanceDueCents       Int
+  /// SHA-256 (lowercase hex) of the customer's anonymous booking-access token.
+  /// The token itself is never stored. Never selected into appointment views.
+  /// Hash, issuedAt and expiresAt are all set or all null (CHECK constraint in
+  /// migration 20261014120000_booking_access_foundation); null = no public access.
+  accessTokenHash       String?            @unique
+  accessTokenIssuedAt   DateTime?
+  accessTokenExpiresAt  DateTime?
+  /// Set once by revocation; requires a token. Never cleared.
+  accessTokenRevokedAt  DateTime?
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
   customer              Customer           @relation(fields: [customerId], references: [id], onDelete: Restrict)

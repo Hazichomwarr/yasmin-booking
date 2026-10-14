@@ -44,3 +44,42 @@ export function isBookingError(
     error instanceof BookingError && (code === undefined || error.code === code)
   );
 }
+
+/**
+ * Why a booking-access token was refused. Internal only — for logs and
+ * support. A public boundary must answer every reason identically, so a
+ * caller cannot learn whether a token or appointment ever existed.
+ */
+export type BookingAccessDenialReason =
+  /** Not a well-formed token; the database was not consulted. */
+  | "MALFORMED"
+  /** No appointment holds this token (never issued, or a different one now). */
+  | "UNKNOWN"
+  | "EXPIRED"
+  | "REVOKED";
+
+/**
+ * An authorization failure: the caller did not prove access to a booking.
+ * Deliberately separate from BookingError (booking-state failures), which a
+ * caller may only see after access was proven. Never carries the token, its
+ * hash, or the appointment id.
+ */
+export class BookingAccessError extends Error {
+  readonly code = "BOOKING_ACCESS_DENIED";
+  readonly reason: BookingAccessDenialReason;
+
+  constructor(reason: BookingAccessDenialReason) {
+    super("Booking access denied.");
+    this.name = "BookingAccessError";
+    this.reason = reason;
+  }
+}
+
+export function isBookingAccessError(
+  error: unknown,
+  reason?: BookingAccessDenialReason,
+): error is BookingAccessError {
+  return (
+    error instanceof BookingAccessError && (reason === undefined || error.reason === reason)
+  );
+}
