@@ -8,15 +8,16 @@
     "start": "next start",
     "lint": "eslint",
     "db:seed": "prisma db seed",
-    "test": "node --import tsx --test \"tests/unit/**/*.test.ts\"",
+    "test": "node --import tsx --test tests/unit/*.test.ts",
     "test:db:prepare": "tsx tests/support/prepare-test-database.ts",
-    "test:integration": "node --import tsx --import ./tests/support/integration-env.ts --test --test-concurrency=1 \"tests/integration/**/*.test.ts\""
+    "test:integration": "node --import tsx --import ./tests/support/integration-env.ts --test --test-concurrency=1 tests/integration/*.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "next": "16.3.8",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "stripe": "^17.7.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
