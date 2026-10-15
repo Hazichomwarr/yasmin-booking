@@ -291,6 +291,34 @@ enum PaymentExceptionProblem {
   LOCATION_TIME_ZONE_INVALID
 }
 
+/// Durable delivery state for a signed Stripe Event. The Stripe Event id is
+/// the idempotency key; no raw payload, signature, card, or customer data is
+/// retained.
+enum StripeWebhookEventState {
+  PENDING
+  PROCESSING
+  PROCESSED
+  RECONCILIATION_REQUIRED
+}
+
+model StripeWebhookEvent {
+  /// Stripe Event id (evt_*), supplied only after signature verification.
+  id                  String                  @id
+  type                String
+  checkoutSessionId   String?
+  state               StripeWebhookEventState @default(PENDING)
+  attemptCount        Int                     @default(1)
+  /// Random fencing token for the current PROCESSING lease; never retained after completion.
+  leaseToken          String?
+  processingStartedAt DateTime
+  processedAt         DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  @@index([state, processingStartedAt])
+  @@index([checkoutSessionId])
+}
+
 // Verified Stripe evidence that could not be applied to a Payment because the
 // association itself is missing, disputed or corrupt. Deliberately NOT linked
 // to Payment/Appointment by foreign key: the expected ids are what the

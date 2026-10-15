@@ -34,3 +34,20 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Stripe webhook
+
+`POST /api/stripe/webhook` runs in the Node.js runtime and verifies the exact
+raw request body with `STRIPE_WEBHOOK_SECRET`. Configure `STRIPE_SECRET_KEY`
+and a distinct test- or live-mode webhook signing secret in Vercel; never put
+either value in client code. Subscribe the endpoint to:
+
+- `checkout.session.completed`
+- `checkout.session.async_payment_succeeded`
+- `checkout.session.async_payment_failed`
+- `checkout.session.expired`
+
+For local test-mode forwarding, use `stripe listen --forward-to
+localhost:3000/api/stripe/webhook` and place the reported signing secret in
+your uncommitted `.env`. Register production endpoints and live-mode secrets
+only as part of the deployment procedure; this repository does not do so.
