@@ -27,7 +27,8 @@ export function useCleanTestDatabase() {
       TRUNCATE "StripeWebhookEvent", "PaymentProcessingException", "RateLimitCounter", "MarketingConsentEvent",
                "AppointmentEvent", "Payment", "Appointment", "Customer",
                "BookingSlot", "SalonLocation",
-               "HairstyleMedia", "Hairstyle", "HairstyleCategory"
+               "HairstyleMedia", "Hairstyle", "HairstyleCategory",
+               "AdminSession", "AdminUser"
       CASCADE
     `);
   });

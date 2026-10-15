@@ -137,7 +137,7 @@ function rateLimitsFrom(raw: string | undefined, problems: string[]): Record<Rat
 }
 
 /** The serialized origin of an absolute http(s) URL, or null. */
-function exactOrigin(value: string | undefined, options: { allowPath: boolean }): string | null {
+export function exactOrigin(value: string | undefined, options: { allowPath: boolean }): string | null {
   if (!value) return null;
   let url: URL;
   try {
@@ -152,7 +152,7 @@ function exactOrigin(value: string | undefined, options: { allowPath: boolean })
   return url.origin;
 }
 
-function isLocalOrigin(origin: string): boolean {
+export function isLocalOrigin(origin: string): boolean {
   const { hostname } = new URL(origin);
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }

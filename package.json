@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "db:seed": "prisma db seed",
+    "admin:provision": "tsx scripts/admin-provision.ts",
     "test": "node --import tsx --test tests/unit/*.test.ts",
     "test:db:prepare": "tsx tests/support/prepare-test-database.ts",
     "test:integration": "node --import tsx --import ./tests/support/integration-env.ts --test --test-concurrency=1 tests/integration/*.test.ts"

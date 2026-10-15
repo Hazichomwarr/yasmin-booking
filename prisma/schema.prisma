@@ -407,8 +407,34 @@ model AppointmentEvent {
 model AdminUser {
   id        String   @id @default(cuid())
   email     String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  /// scrypt hash "scrypt$N$r$p$salt$key" (base64url); never plaintext. Null
+  /// = no password set, so the admin cannot sign in. Set only by the
+  /// provisioning script (scripts/admin-provision.ts).
+  passwordHash      String?
+  passwordUpdatedAt DateTime?
+  /// Set = the admin cannot sign in and all their sessions are invalid.
+  disabledAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  sessions   AdminSession[]
+}
+
+/// Database-backed admin session (YASMIN-2A). The browser holds an opaque
+/// token in the __Host-yasmin_admin cookie; only its SHA-256 is stored.
+/// Rows are never deleted on logout: revokedAt records it (audit trail).
+model AdminSession {
+  id          String    @id @default(cuid())
+  adminUserId String
+  /// SHA-256 (lowercase hex) of the session token.
+  tokenHash   String    @unique
+  createdAt   DateTime  @default(now())
+  /// Fixed at sign-in (ADMIN_SESSION_TTL); never extended.
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Restrict)
+
+  @@index([adminUserId])
+  @@index([expiresAt])
 }
 
 enum MarketingChannel {
