@@ -12,6 +12,7 @@ function href(filters: AdminAppointmentFilters, page: number) {
   if (filters.date) params.set("date", filters.date);
   if (filters.status) params.set("status", filters.status);
   if (filters.q) params.set("q", filters.q);
+  if (filters.range) params.set("range", filters.range);
   if (page > 1) params.set("page", String(page));
   const query = params.toString();
   return `/admin/appointments${query ? `?${query}` : ""}`;
@@ -21,13 +22,15 @@ export default async function AdminAppointmentsPage({ searchParams }: PageProps<
   const access = await requireAdmin();
   const filters = parseAdminAppointmentFilters(await searchParams);
   const result = await listAdminAppointments(access, filters);
-  const filtered = Boolean(filters.date || filters.status || filters.q);
+  const filtered = Boolean(filters.date || filters.status || filters.q || filters.range);
 
   return (
     <AdminShell current="appointments" email={access.email}>
       <h1 className={styles.title}>Appointments</h1>
+      {filters.range === "upcoming" && <p className={styles.filterDescription}>Showing capacity-consuming appointments from tomorrow onward.</p>}
       <section className={styles.panel} aria-label="Filters">
         <form className={styles.filters} method="get" action="/admin/appointments">
+          {filters.range && <input type="hidden" name="range" value={filters.range} />}
           <label>Date<input type="date" name="date" defaultValue={filters.date ?? ""} /></label>
           <label>Status
             <select name="status" defaultValue={filters.status ?? ""}>

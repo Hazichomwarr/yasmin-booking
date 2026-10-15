@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { AdminAppointmentList } from "@/components/admin/AdminAppointmentCard";
+import { AdminDashboardPreview } from "@/components/admin/AdminAppointmentCard";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { STATUS_LABELS, dateLabel } from "@/components/admin/admin-format";
 import styles from "@/components/admin/Admin.module.css";
@@ -10,11 +10,14 @@ import { requireAdmin } from "@/lib/admin/dal";
 export default async function AdminDashboardPage() {
   const access = await requireAdmin();
   const dashboard = await getAdminDashboard(access);
-  const section = (title: string, count: number, list: typeof dashboard.pending.appointments, empty: string, link?: string) => (
-    <section className={styles.panel} aria-label={title}>
-      <h2>{title} <span className={styles.muted}>({count})</span></h2>
-      <AdminAppointmentList appointments={list} empty={empty} />
-      {link && count > list.length && <Link className={styles.more} href={link}>View all {count}</Link>}
+  const preview = (title: string, count: number, appointments: typeof dashboard.pending.appointments, empty: string, href: string, kind: "today" | "upcoming" | "pending") => (
+    <section className={styles.previewPanel} aria-label={title}>
+      <div className={styles.previewHeading}>
+        <h2>{title}</h2>
+        <Link className={styles.more} href={href}>View all</Link>
+      </div>
+      <AdminDashboardPreview appointments={appointments} empty={empty} kind={kind} />
+      {count > appointments.length && <p className={styles.previewCount}>Showing 3 of {count}</p>}
     </section>
   );
 
@@ -24,15 +27,18 @@ export default async function AdminDashboardPage() {
       <h1 className={styles.title}>Dashboard</h1>
       <ul className={styles.counts} aria-label="Appointments by status (all time)">
         {APPOINTMENT_STATUSES.map((status) => (
-          <li key={status} className={styles.count}><strong>{dashboard.countsByStatus[status]}</strong><span>{STATUS_LABELS[status]}</span></li>
+          <li key={status}>
+            <Link className={styles.count} href={`/admin/appointments?status=${status}`}>
+              <strong>{dashboard.countsByStatus[status]}</strong>
+              <span>{STATUS_LABELS[status]}</span>
+            </Link>
+          </li>
         ))}
       </ul>
-      {section("Today", dashboard.todayAppointments.length, dashboard.todayAppointments, "No appointments today.", `/admin/appointments?date=${dashboard.today}`)}
-      <div className={styles.sections}>
-        {section("Upcoming", dashboard.upcoming.count, dashboard.upcoming.appointments, "No upcoming appointments.", "/admin/appointments")}
-        {section("Confirmed (today and later)", dashboard.confirmedUpcoming.count, dashboard.confirmedUpcoming.appointments, "No confirmed upcoming appointments.", "/admin/appointments?status=CONFIRMED")}
-        {section("Pending payment", dashboard.pending.count, dashboard.pending.appointments, "No unpaid bookings.", "/admin/appointments?status=PENDING_PAYMENT")}
-        {section("Cancelled", dashboard.cancelled.count, dashboard.cancelled.appointments, "No cancelled bookings.", "/admin/appointments?status=CANCELLED")}
+      <div className={styles.previewGrid}>
+        {preview("Today’s appointments", dashboard.todayAppointments.count, dashboard.todayAppointments.appointments, "Nothing on the chair today.", `/admin/appointments?date=${dashboard.today}`, "today")}
+        {preview("Upcoming appointments", dashboard.upcoming.count, dashboard.upcoming.appointments, "Your upcoming book is clear.", "/admin/appointments?range=upcoming", "upcoming")}
+        {preview("Pending payment", dashboard.pending.count, dashboard.pending.appointments, "No pending deposits right now.", "/admin/appointments?status=PENDING_PAYMENT", "pending")}
       </div>
     </AdminShell>
   );

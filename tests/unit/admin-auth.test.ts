@@ -114,9 +114,11 @@ describe("admin payment interpretation", () => {
 
 describe("admin appointment filters", () => {
   it("accepts valid values and ignores everything else", () => {
-    assert.deepEqual(parseAdminAppointmentFilters({ date: "2027-03-08", status: "CONFIRMED", q: "  Amina ", page: "2" }), { date: "2027-03-08", status: "CONFIRMED", q: "Amina", page: 2 });
-    assert.deepEqual(parseAdminAppointmentFilters({ date: "2027-02-30", status: "PAID", q: "", page: "-1" }), { date: null, status: null, q: null, page: 1 });
-    assert.deepEqual(parseAdminAppointmentFilters({ date: ["2027-03-08"], page: "1e3" }), { date: null, status: null, q: null, page: 1 });
+    assert.deepEqual(parseAdminAppointmentFilters({ date: "2027-03-08", status: "CONFIRMED", q: "  Amina ", page: "2" }), { date: "2027-03-08", status: "CONFIRMED", q: "Amina", range: null, page: 2 });
+    assert.deepEqual(parseAdminAppointmentFilters({ date: "2027-02-30", status: "PAID", q: "", page: "-1" }), { date: null, status: null, q: null, range: null, page: 1 });
+    assert.deepEqual(parseAdminAppointmentFilters({ date: ["2027-03-08"], page: "1e3" }), { date: null, status: null, q: null, range: null, page: 1 });
+    assert.equal(parseAdminAppointmentFilters({ range: "upcoming" }).range, "upcoming");
+    assert.equal(parseAdminAppointmentFilters({ range: "everything" }).range, null);
     assert.equal(parseAdminAppointmentFilters({ q: "x".repeat(300) }).q?.length, 100);
   });
 });

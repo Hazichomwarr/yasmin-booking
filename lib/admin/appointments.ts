@@ -105,14 +105,15 @@ const chronological = [{ appointmentDate: "asc" }, { slotTimeSnapshot: "asc" }, 
 export type AdminDashboard = {
   today: SalonDate;
   countsByStatus: Record<AppointmentStatus, number>;
-  todayAppointments: AdminAppointmentSummary[];
+  todayAppointments: { count: number; appointments: AdminAppointmentSummary[] };
   upcoming: { count: number; appointments: AdminAppointmentSummary[] };
   confirmedUpcoming: { count: number; appointments: AdminAppointmentSummary[] };
   pending: { count: number; appointments: AdminAppointmentSummary[] };
   cancelled: { count: number; appointments: AdminAppointmentSummary[] };
 };
 
-const SECTION_LIMIT = 10;
+/** Dashboard previews intentionally stay brief; full records belong in the workspace. */
+const SECTION_LIMIT = 3;
 
 /**
  * Dashboard sections, all in terms of existing statuses and rules:
@@ -135,9 +136,10 @@ export async function getAdminDashboard(access: AdminAccess): Promise<AdminDashb
   const pendingWhere = { status: "PENDING_PAYMENT" } satisfies Prisma.AppointmentWhereInput;
   const cancelledWhere = { status: "CANCELLED" } satisfies Prisma.AppointmentWhereInput;
 
-  const [grouped, todayRows, upcomingCount, upcomingRows, confirmedCount, confirmedRows, pendingCount, pendingRows, cancelledCount, cancelledRows] = await Promise.all([
+  const [grouped, todayCount, todayRows, upcomingCount, upcomingRows, confirmedCount, confirmedRows, pendingCount, pendingRows, cancelledCount, cancelledRows] = await Promise.all([
     prisma.appointment.groupBy({ by: ["status"], _count: { _all: true } }),
-    prisma.appointment.findMany({ where: { appointmentDate: todayDb }, select: listSelect, orderBy: chronological }),
+    prisma.appointment.count({ where: { appointmentDate: todayDb } }),
+    prisma.appointment.findMany({ where: { appointmentDate: todayDb }, select: listSelect, orderBy: chronological, take: SECTION_LIMIT }),
     prisma.appointment.count({ where: upcomingWhere }),
     prisma.appointment.findMany({ where: upcomingWhere, select: listSelect, orderBy: chronological, take: SECTION_LIMIT }),
     prisma.appointment.count({ where: confirmedWhere }),
@@ -154,7 +156,7 @@ export async function getAdminDashboard(access: AdminAccess): Promise<AdminDashb
   return {
     today,
     countsByStatus,
-    todayAppointments: await summarize(todayRows, now),
+    todayAppointments: { count: todayCount, appointments: await summarize(todayRows, now) },
     upcoming: { count: upcomingCount, appointments: await summarize(upcomingRows, now) },
     confirmedUpcoming: { count: confirmedCount, appointments: await summarize(confirmedRows, now) },
     pending: { count: pendingCount, appointments: await summarize(pendingRows, now) },
@@ -162,7 +164,13 @@ export async function getAdminDashboard(access: AdminAccess): Promise<AdminDashb
   };
 }
 
-export type AdminAppointmentFilters = { date: SalonDate | null; status: AppointmentStatus | null; q: string | null; page: number };
+export type AdminAppointmentFilters = {
+  date: SalonDate | null;
+  status: AppointmentStatus | null;
+  q: string | null;
+  range: "upcoming" | null;
+  page: number;
+};
 
 /** Parses untrusted search params; anything invalid is ignored, never trusted. */
 export function parseAdminAppointmentFilters(params: Record<string, string | string[] | undefined>): AdminAppointmentFilters {
@@ -176,10 +184,11 @@ export function parseAdminAppointmentFilters(params: Record<string, string | str
   const statusValue = one("status");
   const status = (APPOINTMENT_STATUSES as readonly string[]).includes(statusValue) ? (statusValue as AppointmentStatus) : null;
   const q = one("q").slice(0, 100) || null;
+  const range = one("range") === "upcoming" ? "upcoming" : null;
   const pageText = one("page");
   const pageNumber = /^\d{1,5}$/.test(pageText) ? Number(pageText) : 1;
   const page = pageNumber >= 1 && pageNumber <= 10_000 ? pageNumber : 1;
-  return { date, status, q, page };
+  return { date, status, q, range, page };
 }
 
 export type AdminAppointmentPage = { filters: AdminAppointmentFilters; appointments: AdminAppointmentSummary[]; total: number; pageCount: number };
@@ -187,12 +196,15 @@ export type AdminAppointmentPage = { filters: AdminAppointmentFilters; appointme
 /** Filtered, paginated list: date, status, and case-insensitive customer-name search. */
 export async function listAdminAppointments(access: AdminAccess, filters: AdminAppointmentFilters): Promise<AdminAppointmentPage> {
   assertAdminAccess(access);
+  const now = await databaseNow();
+  const today = salonToday(ADMIN_TIME_ZONE, now);
+  const tomorrowDb = salonDateToDatabase(addSalonDays(today, 1));
   const where: Prisma.AppointmentWhereInput = {
     ...(filters.date ? { appointmentDate: salonDateToDatabase(filters.date) } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.q ? { customer: { name: { contains: filters.q, mode: "insensitive" } } } : {}),
+    ...(filters.range === "upcoming" ? { appointmentDate: { gte: tomorrowDb }, ...capacityConsumingAppointments(now) } : {}),
   };
-  const now = await databaseNow();
   const [total, rows] = await Promise.all([
     prisma.appointment.count({ where }),
     prisma.appointment.findMany({

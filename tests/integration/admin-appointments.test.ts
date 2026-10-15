@@ -71,7 +71,7 @@ describe("admin appointment reads", { skip: integrationSkip }, () => {
     const access = await adminAccess();
     const dashboard = await getAdminDashboard(access);
     assert.deepEqual(dashboard.countsByStatus, { PENDING_PAYMENT: 0, CONFIRMED: 0, COMPLETED: 0, CANCELLED: 0, NO_SHOW: 0 });
-    assert.equal(dashboard.todayAppointments.length + dashboard.upcoming.count + dashboard.pending.count + dashboard.cancelled.count, 0);
+    assert.equal(dashboard.todayAppointments.count + dashboard.upcoming.count + dashboard.pending.count + dashboard.cancelled.count, 0);
     assert.deepEqual([(await listAdminAppointments(access, parseAdminAppointmentFilters({}))).total], [0]);
   });
 
@@ -91,13 +91,32 @@ describe("admin appointment reads", { skip: integrationSkip }, () => {
     const dashboard = await getAdminDashboard(access);
     assert.equal(dashboard.today, today);
     assert.deepEqual(dashboard.countsByStatus, { PENDING_PAYMENT: 2, CONFIRMED: 2, COMPLETED: 1, CANCELLED: 1, NO_SHOW: 0 });
-    assert.deepEqual(dashboard.todayAppointments.map((a) => a.id), [todayConfirmed.id]);
+    assert.deepEqual(dashboard.todayAppointments.appointments.map((a) => a.id), [todayConfirmed.id]);
     // Upcoming = after today AND occupying a place: the lapsed hold and the cancellation do not.
     assert.deepEqual(dashboard.upcoming.appointments.map((a) => a.customerName), ["Tomorrow Confirmed", "Active Hold"]);
     assert.equal(dashboard.upcoming.count, 2);
     assert.deepEqual(dashboard.confirmedUpcoming.appointments.map((a) => a.customerName), ["Today Confirmed", "Tomorrow Confirmed"]);
     assert.equal(dashboard.pending.count, 2);
     assert.deepEqual(dashboard.cancelled.appointments.map((a) => a.customerName), ["Cancelled One"]);
+  });
+
+  it("limits dashboard previews to three and retains the capacity-aware upcoming URL filter", async () => {
+    const access = await adminAccess();
+    const [slot] = await place();
+    const today = salonToday(ADMIN_TIME_ZONE, await databaseNow());
+
+    for (let offset = 1; offset <= 4; offset += 1) {
+      await appointment(slot, addSalonDays(today, offset), "CONFIRMED", { name: `Upcoming ${offset}` });
+    }
+
+    const dashboard = await getAdminDashboard(access);
+    assert.equal(dashboard.upcoming.count, 4);
+    assert.equal(dashboard.upcoming.appointments.length, 3);
+    assert.deepEqual(dashboard.upcoming.appointments.map((item) => item.customerName), ["Upcoming 1", "Upcoming 2", "Upcoming 3"]);
+
+    const filters = parseAdminAppointmentFilters({ range: "upcoming" });
+    assert.equal(filters.range, "upcoming");
+    assert.equal((await listAdminAppointments(access, filters)).total, 4);
   });
 
   it("interprets deposits from stored facts, never from an initiated Checkout", async () => {

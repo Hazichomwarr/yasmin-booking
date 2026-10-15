@@ -5,21 +5,37 @@ import { AdminLogoutButton } from "./AdminLogoutButton";
 import styles from "./Admin.module.css";
 
 export function AdminShell({ current, email, children }: { current: "dashboard" | "appointments"; email: string; children: ReactNode }) {
+  const navigation = (
+    <>
+      <Link href="/admin" aria-current={current === "dashboard" ? "page" : undefined}>Dashboard</Link>
+      <Link href="/admin/appointments" aria-current={current === "appointments" ? "page" : undefined}>Appointments</Link>
+    </>
+  );
+
   return (
     <main className={styles.page}>
       <div className={styles.shell}>
-        <header className={styles.header}>
+        <aside className={styles.sidebar} aria-label="Admin workspace">
           <div>
-            <p className={styles.brand}>YASMIN’S BEAUTY SALON · ADMIN</p>
-            <p className={styles.who}>Signed in as {email}</p>
+            <p className={styles.brand}>YASMIN’S</p>
+            <p className={styles.brandSubtitle}>Beauty Salon</p>
           </div>
-          <nav className={styles.nav} aria-label="Admin">
-            <Link href="/admin" aria-current={current === "dashboard" ? "page" : undefined}>Dashboard</Link>
-            <Link href="/admin/appointments" aria-current={current === "appointments" ? "page" : undefined}>Appointments</Link>
+          <nav className={styles.sidebarNav} aria-label="Admin navigation">{navigation}</nav>
+          <div className={styles.sidebarFooter}>
+            <p className={styles.who}>Signed in as<br />{email}</p>
             <AdminLogoutButton />
-          </nav>
-        </header>
-        {children}
+          </div>
+        </aside>
+        <div className={styles.workspace}>
+          <header className={styles.mobileHeader}>
+            <Link className={styles.mobileBrand} href="/admin">YASMIN’S <span>Beauty Salon</span></Link>
+            <details className={styles.mobileMenu}>
+              <summary aria-label="Open admin navigation">Menu</summary>
+              <nav aria-label="Admin navigation">{navigation}<AdminLogoutButton /></nav>
+            </details>
+          </header>
+          <div className={styles.content}>{children}</div>
+        </div>
       </div>
     </main>
   );
