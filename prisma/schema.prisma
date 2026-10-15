@@ -246,6 +246,9 @@ model Payment {
   providerPaymentIntentId   String?                      @unique
   /// The Checkout Session expiry fixed when this attempt was created.
   providerCheckoutExpiresAt DateTime?
+  /// Fences the one Stripe create/recovery caller allowed outside DB locks.
+  checkoutRecoveryLeaseToken String?
+  checkoutRecoveryLeasedAt   DateTime?
   paidAt                    DateTime?
   /// Set once, when this charge confirmed its appointment. Never cleared.
   allocatedAt               DateTime?

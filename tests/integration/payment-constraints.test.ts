@@ -18,6 +18,7 @@ const PAYMENT_CHECKS = [
   "Payment_allocation_needs_receipt",
   "Payment_amount_positive",
   "Payment_case_needs_receipt",
+  "Payment_checkout_recovery_lease_pair",
   "Payment_currency_iso",
   "Payment_received_has_intent",
   "Payment_received_iff_paidAt",
@@ -80,7 +81,7 @@ describe("migration #3 schema", { skip: integrationSkip }, () => {
     `;
     assert.deepEqual(
       rows.map((r) => r.conname),
-      [...PAYMENT_CHECKS],
+    [...PAYMENT_CHECKS],
     );
   });
 

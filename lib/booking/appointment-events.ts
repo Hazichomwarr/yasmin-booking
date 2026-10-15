@@ -159,6 +159,8 @@ export type BookingAccessRevocationReason =
   | "suspected-compromise"
   /** The customer asked for the access to be withdrawn. */
   | "customer-request"
+  /** A browser started a replacement booking after this booking was safely finished. */
+  | "browser-replacement"
   /** Any other deliberate staff decision. */
   | "administrative";
 
@@ -209,6 +211,7 @@ const STRIPE_REFUND_STATUSES: ReadonlySet<string> = new Set<StripeRefundStatus>(
 const ACCESS_REVOCATION_REASONS: ReadonlySet<string> = new Set<BookingAccessRevocationReason>([
   "suspected-compromise",
   "customer-request",
+  "browser-replacement",
   "administrative",
 ]);
 

@@ -370,6 +370,7 @@ describe("public booking API", { skip: integrationSkip }, () => {
       const confirmed = await booked(h);
       await checkout(h, { cookie: confirmed, ip: "203.0.113.10" });
       await fulfill((await appointmentFor(confirmed)).id);
+      const confirmedAppointmentId = (await appointmentFor(confirmed)).id;
       const cancelled = await booked(h, undefined, "203.0.113.11");
       await cancelAppointment((await appointmentFor(cancelled)).id);
       const expired = await booked(h, undefined, "203.0.113.12");
@@ -381,8 +382,10 @@ describe("public booking API", { skip: integrationSkip }, () => {
         assert.equal(replaced.status, 201, old);
         assert.notEqual(tokenFrom(replaced.setCookie), old);
       }
-      const kept = await appointmentFor(confirmed);
-      assert.deepEqual([kept.status, kept.accessTokenRevokedAt, kept.payments.length], ["CONFIRMED", null, 1], "never revoked, cancelled or charged again");
+      const kept = await prisma.appointment.findUniqueOrThrow({ where: { id: confirmedAppointmentId }, include: { payments: true, events: true } });
+      assert.deepEqual([kept.status, kept.payments.length], ["CONFIRMED", 1], "never cancelled or charged again");
+      assert.ok(kept.accessTokenRevokedAt);
+      assert.equal(kept.events.filter((event) => event.type === "ACCESS_REVOKED").length, 1);
     });
 
     it("refuses both of two concurrent creations carrying a payable booking's cookie", async () => {
@@ -394,7 +397,7 @@ describe("public booking API", { skip: integrationSkip }, () => {
       assert.equal(await prisma.appointment.count(), before);
     });
 
-    it("lets two concurrent creations replace a confirmed booking's cookie without touching it", async () => {
+    it("allows only one concurrent replacement of a confirmed booking credential", async () => {
       const h = harness();
       const token = await booked(h);
       await checkout(h, { cookie: token, ip: "203.0.113.10" });
@@ -402,19 +405,20 @@ describe("public booking API", { skip: integrationSkip }, () => {
       const original = await appointmentFor(token);
 
       const responses = await Promise.all([1, 2].map(async (n) => create(h, { body: await bookingInput(), cookie: token, ip: `203.0.113.${60 + n}` })));
-      assert.deepEqual(responses.map((r) => r.status), [201, 201]);
-      // The browser keeps one cookie; the other new hold has no payment path and simply expires.
+      assert.deepEqual(responses.map((r) => r.status).sort(), [201, 409]);
       const fresh = await prisma.appointment.findMany({ where: { id: { not: original.id } }, include: { payments: true } });
-      assert.equal(fresh.length, 2);
+      assert.equal(fresh.length, 1);
       assert.ok(fresh.every((a) => a.status === "PENDING_PAYMENT" && a.payments.length === 0));
-      assert.deepEqual(await appointmentFor(token), original);
+      const historical = await prisma.appointment.findUniqueOrThrow({ where: { id: original.id }, include: { events: true } });
+      assert.ok(historical.accessTokenRevokedAt);
+      assert.equal(historical.events.filter((event) => event.type === "ACCESS_REVOKED").length, 1);
     });
 
-    it("fails closed if the existing booking cannot be checked", async () => {
+    it("does not use the legacy preflight replacement seam", async () => {
       const h = harness({ canReplaceBooking: async () => { throw new Error("database down"); } });
       const response = await create(h, { body: await bookingInput(), cookie: "A".repeat(43), ip: "203.0.113.10" });
-      assert.deepEqual([response.status, response.setCookie], [503, null]);
-      assert.equal(await prisma.appointment.count(), 0);
+      assert.equal(response.status, 201);
+      assert.equal(await prisma.appointment.count(), 1);
     });
   });
 

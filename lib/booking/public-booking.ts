@@ -5,7 +5,8 @@ import { recordPublicFormConsent } from "@/lib/customers/marketing-consent";
 import { prisma } from "@/lib/prisma";
 
 import { appendAppointmentEvent, eventDetails } from "./appointment-events";
-import { issueBookingAccess } from "./access";
+import { assertBookingAccessUnderLock, issueBookingAccess, resolveBookingAccess, type BookingAccessGrant } from "./access";
+import { isSafeToLeaveBehind } from "./booking-status";
 import { dateClosedReason, locationClosedReason, slotClosedReason } from "./booking-policy";
 import { countConsumedCapacity, lockBookingSlotCapacity, remainingCapacity } from "./capacity";
 import { BookingError } from "./errors";
@@ -44,6 +45,17 @@ export type PublicBookingResult = {
   accessExpiresAt: Date;
 };
 
+export type PublicBookingCreateOptions = {
+  /** A valid existing browser credential to consume atomically, if any. */
+  replacementAccessToken?: string;
+};
+
+/** A previously valid browser credential cannot safely be replaced. */
+export class PublicBookingReplacementConflictError extends Error {
+  readonly code = "PUBLIC_BOOKING_REPLACEMENT_CONFLICT";
+  constructor() { super("The existing booking cannot be replaced."); }
+}
+
 /** Typed, non-persisted input failure for a future HTTP 400 boundary. */
 export class PublicBookingValidationError extends Error {
   readonly code = "INVALID_PUBLIC_BOOKING_INPUT";
@@ -52,10 +64,14 @@ export class PublicBookingValidationError extends Error {
 
 const allowed = new Set(["name", "email", "phone", "locationId", "bookingSlotId", "appointmentDate", "hairstyleId", "preferredStylistName", "customerNotes", "emailMarketingConsent", "smsMarketingConsent"]);
 
-export async function createPublicBooking(value: unknown): Promise<PublicBookingResult> {
+export async function createPublicBooking(value: unknown, options: PublicBookingCreateOptions = {}): Promise<PublicBookingResult> {
   const input = parsePublicBookingInput(value);
   const date = parseSalonDate(input.appointmentDate);
+  const replacementGrant = options.replacementAccessToken
+    ? await resolveBookingAccess(options.replacementAccessToken)
+    : undefined;
   return prisma.$transaction(async (tx) => {
+    if (replacementGrant) await consumeReplacementGrant(tx, replacementGrant);
     const location = await tx.salonLocation.findUnique({ where: { id: input.locationId }, select: { id: true, name: true, timeZone: true, isActive: true, acceptsOnlineBooking: true } });
     if (!location) throw new BookingError("LOCATION_NOT_FOUND", "Location does not exist.");
     if (locationClosedReason(location)) throw new BookingError("LOCATION_NOT_BOOKABLE", "Location is not bookable.");
@@ -80,6 +96,56 @@ export async function createPublicBooking(value: unknown): Promise<PublicBooking
     await appendAppointmentEvent(tx, appointment.id, "CREATED", eventDetails.created({ status: appointment.status, holdExpiresAt: appointment.holdExpiresAt!.toISOString(), schedule: { locationId: location.id, locationName: location.name, timeZone: location.timeZone, bookingSlotId: slot.id, appointmentDate: date, slotTime: appointment.slotTimeSnapshot }, hairstyleId: appointment.hairstyleId, hairstyleNameSnapshot: appointment.hairstyleNameSnapshot, pricing: v1BookingPriceSnapshot() }));
     return { booking: { appointmentId: appointment.id, locationName: location.name, appointmentDate: date, slotTime: appointment.slotTimeSnapshot, holdExpiresAt: appointment.holdExpiresAt!, totalPriceCents: appointment.totalPriceCents, depositAmountCents: appointment.depositAmountCents, balanceDueCents: appointment.balanceDueCents }, accessToken: access.token, accessExpiresAt: access.expiresAt };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+}
+
+/** Consumes the old credential and writes its audit record in this transaction. */
+async function consumeReplacementGrant(tx: Prisma.TransactionClient, grant: BookingAccessGrant): Promise<void> {
+  try {
+    await assertBookingAccessUnderLock(tx, grant);
+  } catch {
+    throw new PublicBookingReplacementConflictError();
+  }
+  const previous = await tx.appointment.findUniqueOrThrow({
+    where: { id: grant.appointmentId },
+    select: {
+      status: true,
+      holdExpiresAt: true,
+      accessTokenIssuedAt: true,
+      accessTokenExpiresAt: true,
+      accessTokenRevokedAt: true,
+      payments: { where: { purpose: "BOOKING_DEPOSIT" }, select: { status: true, providerCheckoutSessionId: true, paidAt: true, allocatedAt: true } },
+    },
+  });
+  const now = (await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`)[0].now;
+  const [{ unresolved }] = await tx.$queryRaw<{ unresolved: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1 FROM "PaymentProcessingException"
+      WHERE "expectedAppointmentId" = ${grant.appointmentId}
+        AND ("resolvedAt" IS NULL OR "lastObservedAt" > "resolvedAt")
+    ) AS unresolved
+  `;
+  const payment = previous.payments[0] ?? null;
+  if (!isSafeToLeaveBehind({
+    appointmentStatus: previous.status,
+    holdExpiresAt: previous.holdExpiresAt,
+    payment: payment && {
+      status: payment.status,
+      hasCheckoutSession: payment.providerCheckoutSessionId !== null,
+      received: payment.paidAt !== null,
+      allocated: payment.allocatedAt !== null,
+    },
+    unresolvedPaymentException: unresolved,
+  }, now) || !previous.accessTokenIssuedAt || !previous.accessTokenExpiresAt || previous.accessTokenRevokedAt) {
+    throw new PublicBookingReplacementConflictError();
+  }
+  await tx.appointment.update({ where: { id: grant.appointmentId }, data: { accessTokenRevokedAt: now } });
+  await appendAppointmentEvent(tx, grant.appointmentId, "ACCESS_REVOKED", eventDetails.accessRevoked({
+    reason: "browser-replacement",
+    actorId: "public-booking-replacement",
+    tokenIssuedAt: previous.accessTokenIssuedAt,
+    tokenExpiresAt: previous.accessTokenExpiresAt,
+    revokedAt: now,
+  }));
 }
 
 /**

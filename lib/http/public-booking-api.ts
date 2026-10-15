@@ -1,10 +1,13 @@
-import { getAuthorizedBookingStatus, isAuthorizedBookingSafeToLeave, type PublicBookingStatus } from "@/lib/booking/booking-status";
+import { resolveBookingAccess } from "@/lib/booking/access";
+import { getAuthorizedBookingStatus, type PublicBookingStatus } from "@/lib/booking/booking-status";
 import { startAuthorizedBookingCheckout, type CheckoutAmbiguityReason, type CheckoutStartResult } from "@/lib/booking/checkout";
 import { isBookingAccessError, isBookingError } from "@/lib/booking/errors";
 import {
   createPublicBooking,
   parsePublicBookingInput,
+  PublicBookingReplacementConflictError,
   PublicBookingValidationError,
+  type PublicBookingCreateOptions,
   type PublicBookingInput,
   type PublicBookingResult,
 } from "@/lib/booking/public-booking";
@@ -49,11 +52,11 @@ export type PublicApiLogEntry = {
 
 export type PublicBookingApiDeps = {
   env: () => Env;
-  createBooking: (input: PublicBookingInput) => Promise<PublicBookingResult>;
+  createBooking: (input: PublicBookingInput, options?: PublicBookingCreateOptions) => Promise<PublicBookingResult>;
   startCheckout: (accessToken: string) => Promise<CheckoutStartResult>;
   getStatus: (accessToken: string) => Promise<PublicBookingStatus>;
-  /** Whether the cookie's existing booking may be left behind (see isSafeToLeaveBehind). */
-  canReplaceBooking: (accessToken: string) => Promise<boolean>;
+  /** Legacy test seam; replacement safety is now checked transactionally. */
+  canReplaceBooking?: (accessToken: string) => Promise<boolean>;
   consumeRateLimits: (checks: readonly RateLimitCheck[], secret: string) => Promise<RateLimitDecision>;
   log: (entry: PublicApiLogEntry) => void;
 };
@@ -63,7 +66,6 @@ export const defaultPublicBookingApiDeps: PublicBookingApiDeps = {
   createBooking: createPublicBooking,
   startCheckout: (token) => startAuthorizedBookingCheckout(token),
   getStatus: (token) => getAuthorizedBookingStatus(token),
-  canReplaceBooking: (token) => isAuthorizedBookingSafeToLeave(token),
   consumeRateLimits: (checks, secret) => consumeRateLimits(checks, { secret }),
   log: (entry) => console.info(JSON.stringify({ event: "public-booking-api", ...entry })),
 };
@@ -200,23 +202,29 @@ export function createPublicBookingApi(deps: PublicBookingApiDeps = defaultPubli
     ]);
     if (contactLimited) return contactLimited;
 
-    // Cookie replacement: never leave behind a booking that may still be
-    // payable or has unresolved payment state. Denial changes nothing.
+    // Resolve a supplied credential before the write, then consume/re-check it
+    // inside createPublicBooking's transaction. This avoids a read-then-write
+    // replacement race between two browser requests.
     const cookie = readBookingCookie(request.headers);
+    let replacementAccessToken: string | undefined;
     if (cookie.kind === "present") {
       try {
-        if (!(await deps.canReplaceBooking(cookie.token))) return fail(route, request, "ACTIVE_BOOKING_EXISTS");
+        await resolveBookingAccess(cookie.token);
+        replacementAccessToken = cookie.token;
       } catch (error) {
-        // An unusable credential is simply replaced; anything else fails closed.
+        // An unusable credential is replaced; any infrastructure failure fails closed.
         if (!isBookingAccessError(error)) return fail(route, request, "SERVICE_UNAVAILABLE", "existing-booking-check-failed");
       }
     }
 
     let result: PublicBookingResult;
     try {
-      result = await deps.createBooking(input);
+      result = await deps.createBooking(input, { replacementAccessToken });
     } catch (error) {
       if (error instanceof PublicBookingValidationError) return fail(route, request, "INVALID_BOOKING_INPUT");
+      if (error instanceof PublicBookingReplacementConflictError || (replacementAccessToken && isBookingAccessError(error))) {
+        return fail(route, request, "ACTIVE_BOOKING_EXISTS");
+      }
       return unexpected(route, request, error);
     }
 

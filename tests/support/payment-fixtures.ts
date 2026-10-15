@@ -149,7 +149,7 @@ export async function assertPaymentInvariants() {
     SELECT count(*)::int AS checks FROM pg_constraint
     WHERE conrelid = '"Payment"'::regclass AND contype = 'c' AND convalidated
   `;
-  assert.equal(checks, 10);
+  assert.equal(checks, 11);
   const [{ violations }] = await prisma.$queryRaw<{ violations: number }[]>`
     SELECT count(*)::int AS violations FROM "Payment" WHERE NOT (
       "amountCents" > 0 AND "currency" ~ '^[a-z]{3}$'
@@ -209,4 +209,3 @@ export async function waitForLockWaiters(count: number) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
-

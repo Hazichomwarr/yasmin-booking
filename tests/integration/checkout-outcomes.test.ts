@@ -137,29 +137,30 @@ describe("Checkout outcome refinement", { skip: integrationSkip }, () => {
     assert.equal(s.creates(), 1);
   });
 
-  it("classifies an uncertain creation identically on the first attempt, an immediate retry and a retry after five minutes", async () => {
+  it("safely replays an uncertain creation with the original Payment idempotency key", async () => {
     const created = await publicBooking();
     const s = stripe({ create: "throw" });
     const expected = { reason: "checkout-creation-unconfirmed", retryable: false };
 
     assert.deepEqual(reasonOf(await startAuthorizedBookingCheckout(created.accessToken, { adapter: s.adapter })), expected, "first attempt");
-    assert.deepEqual(reasonOf(await startAuthorizedBookingCheckout(created.accessToken, { adapter: s.adapter })), expected, "immediate retry");
-    await prisma.$executeRaw`
-      UPDATE "Payment" SET "createdAt" = "createdAt" - interval '5 minutes 1 second'
-      WHERE "appointmentId" = ${created.booking.appointmentId}
-    `;
-    assert.deepEqual(reasonOf(await startAuthorizedBookingCheckout(created.accessToken, { adapter: s.adapter })), expected, "after five minutes");
+    await prisma.payment.updateMany({
+      where: { appointmentId: created.booking.appointmentId },
+      data: { checkoutRecoveryLeasedAt: new Date(Date.now() - 31_000) },
+    });
+    s.mode.create = undefined;
+    assert.equal((await startAuthorizedBookingCheckout(created.accessToken, { adapter: s.adapter })).kind, "ready", "safe replay");
 
-    // The one Payment and its idempotency key are preserved; Stripe is never asked again.
+    // The one Payment and its idempotency key are preserved; recovery only
+    // replays that same provider attempt.
     const payment = await depositOf(created.booking.appointmentId);
-    assert.equal(s.creates(), 1);
-    assert.deepEqual(s.idempotencyKeys, [`yasmin-booking-deposit:${payment.id}`]);
+    assert.equal(s.creates(), 2);
+    assert.deepEqual(s.idempotencyKeys, [`yasmin-booking-deposit:${payment.id}`, `yasmin-booking-deposit:${payment.id}`]);
     assert.equal(await prisma.payment.count({ where: { appointmentId: created.booking.appointmentId } }), 1);
-    assert.deepEqual([payment.status, payment.providerCheckoutSessionId], ["PENDING", null]);
+    assert.deepEqual([payment.status, payment.providerCheckoutSessionId], ["PENDING", `cs_outcome_${payment.id}`]);
     assert.equal(await prisma.appointmentEvent.count({ where: { appointmentId: created.booking.appointmentId, type: "HOLD_EXPIRY_CHANGED" } }), 1);
   });
 
-  it("treats a concurrent request during an in-flight creation as uncertain, then returns the recorded Session", async () => {
+  it("replays a concurrent in-flight creation with the same provider Session identity", async () => {
     const created = await publicBooking();
     let release!: () => void;
     const released = new Promise<void>((resolve) => (release = resolve));
@@ -181,7 +182,7 @@ describe("Checkout outcome refinement", { skip: integrationSkip }, () => {
     release();
     assert.equal((await first).kind, "ready");
     assert.equal((await startAuthorizedBookingCheckout(created.accessToken, { adapter: s.adapter })).kind, "ready");
-    assert.equal(s.creates(), 1);
+    assert.equal((await prisma.payment.findFirstOrThrow({ where: { appointmentId: created.booking.appointmentId } })).providerCheckoutSessionId, `cs_outcome_${(await depositOf(created.booking.appointmentId)).id}`);
   });
 
   it("moves an uncertain creation to attempt-ended only on verified expiry evidence", async () => {

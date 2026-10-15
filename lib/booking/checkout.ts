@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Prisma } from "@prisma/client";
 
 import type { StripeCheckoutAdapter } from "@/lib/stripe/checkout";
@@ -17,6 +19,7 @@ export const MIN_ORIGINAL_HOLD_MS = 60_000;
 const CHECKOUT_WINDOW_MS = 34 * 60_000;
 const HOLD_GRACE_MS = 5 * 60_000;
 const MIN_PROVIDER_CREATE_WINDOW_MS = 31 * 60_000;
+const RECOVERY_LEASE_MS = 30_000;
 
 export type CheckoutStartResult =
   | { kind: "ready"; paymentId: string; checkoutUrl: string; expiresAt: Date }
@@ -73,7 +76,7 @@ export const postgresCheckoutClock: CheckoutClock = {
   },
 };
 
-type PreparedCheckout = { paymentId: string; appointmentId: string; amountCents: number; currency: "usd"; expiresAt: Date };
+type PreparedCheckout = { paymentId: string; appointmentId: string; amountCents: number; currency: "usd"; expiresAt: Date; leaseToken: string };
 
 /**
  * Internal-only payment adapter. A future authenticated customer boundary must
@@ -95,49 +98,53 @@ export async function startBookingDepositCheckout(
     if (!await canReturnExistingSession(prepared, session.id, clock, grant)) return ambiguous(prepared.paymentId, "booking-changed");
     return { kind: "ready", paymentId: prepared.paymentId, checkoutUrl: session.url, expiresAt: session.expiresAt };
   }
-  if (prepared.kind !== "prepared") return prepared;
+  if (prepared.kind !== "prepared" && prepared.kind !== "recovery") return prepared as CheckoutStartResult;
+  const checkout = prepared.checkout;
 
-  if (prepared.checkout.expiresAt.getTime() - (await clock.now()).getTime() < MIN_PROVIDER_CREATE_WINDOW_MS) {
-    return { kind: "retry-window-expired", paymentId: prepared.checkout.paymentId };
+  if (checkout.expiresAt.getTime() - (await clock.now()).getTime() < MIN_PROVIDER_CREATE_WINDOW_MS) {
+    return { kind: "retry-window-expired", paymentId: checkout.paymentId };
   }
 
   let session;
   try {
-    session = await adapter.createDepositCheckout(prepared.checkout);
+    session = await adapter.createDepositCheckout(checkout);
   } catch {
     // The provider may have accepted the idempotent request. Do not create a
     // different attempt or shorten the hold without proof that no session exists.
-    return ambiguous(prepared.checkout.paymentId, "checkout-creation-unconfirmed");
+    return ambiguous(checkout.paymentId, "checkout-creation-unconfirmed");
   }
 
-  if (!sessionMatchesPayment(session, prepared.checkout)) {
+  if (!sessionMatchesPayment(session, checkout)) {
     // Nothing is persisted, so later requests see the same unrecorded Payment.
-    return ambiguous(prepared.checkout.paymentId, "checkout-creation-unconfirmed");
+    return ambiguous(checkout.paymentId, "checkout-creation-unconfirmed");
   }
-  await adapter.afterCreateBeforePersistence?.(session, prepared.checkout);
+  await adapter.afterCreateBeforePersistence?.(session, checkout);
 
   let persisted: boolean;
   try {
     persisted = await prisma.$transaction(async (tx) => {
-    const appointment = await lockAppointment(tx, prepared.checkout.appointmentId);
+    const appointment = await lockAppointment(tx, checkout.appointmentId);
     const locked = await tx.$queryRaw<{ id: string }[]>`
-      SELECT "id" FROM "Payment" WHERE "id" = ${prepared.checkout.paymentId} FOR UPDATE
+      SELECT "id" FROM "Payment" WHERE "id" = ${checkout.paymentId} FOR UPDATE
     `;
     if (locked.length === 0) throw new Error("Prepared Payment disappeared before Checkout Session persistence.");
-    const payment = await tx.payment.findUniqueOrThrow({ where: { id: prepared.checkout.paymentId }, select: { providerCheckoutSessionId: true, status: true } });
+    const payment = await tx.payment.findUniqueOrThrow({ where: { id: checkout.paymentId }, select: { providerCheckoutSessionId: true, status: true } });
     if (payment.providerCheckoutSessionId && payment.providerCheckoutSessionId !== session.id) throw new Error("Conflicting Stripe Checkout Session identity.");
     if (appointment.status !== "PENDING_PAYMENT" || payment.status === "PAID" || payment.status === "REFUNDED") return false;
-    await tx.payment.update({ where: { id: prepared.checkout.paymentId }, data: { providerCheckoutSessionId: session.id } });
-    return true;
+    const persisted = await tx.payment.updateMany({
+      where: { id: checkout.paymentId, providerCheckoutSessionId: null, checkoutRecoveryLeaseToken: checkout.leaseToken },
+      data: { providerCheckoutSessionId: session.id, checkoutRecoveryLeaseToken: null, checkoutRecoveryLeasedAt: null },
+    });
+    return persisted.count === 1;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   } catch {
     // Stripe may have created the Session, but its identity was not durably
     // recorded. A retry must not create a second chargeable Session.
-    return ambiguous(prepared.checkout.paymentId, "checkout-creation-unconfirmed");
+    return ambiguous(checkout.paymentId, "checkout-creation-unconfirmed");
   }
 
-  if (!persisted) return ambiguous(prepared.checkout.paymentId, "booking-changed");
-  return { kind: "ready", paymentId: prepared.checkout.paymentId, checkoutUrl: session.url, expiresAt: session.expiresAt };
+  if (!persisted) return ambiguous(checkout.paymentId, "booking-changed");
+  return { kind: "ready", paymentId: checkout.paymentId, checkoutUrl: session.url, expiresAt: session.expiresAt };
 }
 
 /** Internal customer-authorized entry point. The token alone selects the appointment. */
@@ -193,7 +200,7 @@ async function canReturnExistingSession(
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
 
-async function prepareCheckout(appointmentId: string, clock: CheckoutClock, grant?: BookingAccessGrant): Promise<{ kind: "prepared"; checkout: PreparedCheckout } | { kind: "existing"; paymentId: string; appointmentId: string; checkoutSessionId: string; amountCents: number; expiresAt: Date } | CheckoutStartResult> {
+async function prepareCheckout(appointmentId: string, clock: CheckoutClock, grant?: BookingAccessGrant): Promise<{ kind: "prepared" | "recovery"; checkout: PreparedCheckout } | { kind: "existing"; paymentId: string; appointmentId: string; checkoutSessionId: string; amountCents: number; expiresAt: Date } | CheckoutStartResult> {
   return prisma.$transaction(async (tx) => {
     const appointment = await lockAppointment(tx, appointmentId);
     if (grant) await assertBookingAccessUnderLock(tx, grant);
@@ -209,7 +216,28 @@ async function prepareCheckout(appointmentId: string, clock: CheckoutClock, gran
     if (existing && (existing.status === "EXPIRED" || existing.status === "FAILED")) return ambiguous(existing.id, "checkout-attempt-ended");
     if (existing && (existing.status === "PAID" || existing.status === "REFUNDED")) return ambiguous(existing.id, "payment-already-received");
     if (existing?.providerCheckoutSessionId && existing.providerCheckoutExpiresAt) return { kind: "existing", paymentId: existing.id, appointmentId: appointment.id, checkoutSessionId: existing.providerCheckoutSessionId, amountCents: existing.amountCents, expiresAt: existing.providerCheckoutExpiresAt };
-    if (existing) return ambiguous(existing.id, "checkout-creation-unconfirmed");
+    // A missing local Session may be a lost Stripe response. The caller can
+    // replay only this original Payment/key during the short safe window.
+    if (existing && !existing.providerCheckoutExpiresAt) return ambiguous(existing.id, "checkout-creation-unconfirmed");
+    if (existing) {
+      const now = await clock.now(tx);
+      if (existing.checkoutRecoveryLeaseToken && existing.checkoutRecoveryLeasedAt
+        && existing.checkoutRecoveryLeasedAt.getTime() > now.getTime() - RECOVERY_LEASE_MS) {
+        return ambiguous(existing.id, "checkout-creation-unconfirmed");
+      }
+      const leaseToken = randomUUID();
+      const claimed = await tx.payment.updateMany({
+        where: {
+          id: existing.id,
+          providerCheckoutSessionId: null,
+          checkoutRecoveryLeaseToken: existing.checkoutRecoveryLeaseToken,
+          checkoutRecoveryLeasedAt: existing.checkoutRecoveryLeasedAt,
+        },
+        data: { checkoutRecoveryLeaseToken: leaseToken, checkoutRecoveryLeasedAt: now },
+      });
+      if (claimed.count !== 1) return ambiguous(existing.id, "checkout-creation-unconfirmed");
+      return { kind: "recovery", checkout: { paymentId: existing.id, appointmentId: appointment.id, amountCents: existing.amountCents, currency: "usd", expiresAt: existing.providerCheckoutExpiresAt as Date, leaseToken } };
+    }
     const slotExists = await lockBookingSlotCapacity(tx, appointment.bookingSlotId);
     const slot = slotExists ? await tx.bookingSlot.findUnique({ where: { id: appointment.bookingSlotId }, select: { id: true, locationId: true, localStartTime: true, capacity: true, isActive: true } }) : null;
     if (!slot || slot.locationId !== location.id) throw new BookingError("SLOT_NOT_FOUND", "Appointment slot is no longer valid.");
@@ -225,9 +253,10 @@ async function prepareCheckout(appointmentId: string, clock: CheckoutClock, gran
     if (remainingCapacity(slot.capacity, consumed) === 0) throw new BookingError("CAPACITY_FULL", "The appointment slot is no longer available.");
     const expiresAt = new Date(Math.floor(now.getTime() / 1000) * 1000 + CHECKOUT_WINDOW_MS);
     const holdExpiresAt = new Date(expiresAt.getTime() + HOLD_GRACE_MS);
-    const payment = await tx.payment.create({ data: { appointmentId: appointment.id, provider: "STRIPE", purpose: "BOOKING_DEPOSIT", amountCents: appointment.depositAmountCents, currency: "usd", providerCheckoutExpiresAt: expiresAt } });
+    const leaseToken = randomUUID();
+    const payment = await tx.payment.create({ data: { appointmentId: appointment.id, provider: "STRIPE", purpose: "BOOKING_DEPOSIT", amountCents: appointment.depositAmountCents, currency: "usd", providerCheckoutExpiresAt: expiresAt, checkoutRecoveryLeaseToken: leaseToken, checkoutRecoveryLeasedAt: now } });
     await tx.appointment.update({ where: { id: appointment.id }, data: { holdExpiresAt } });
     await appendAppointmentEvent(tx, appointment.id, "HOLD_EXPIRY_CHANGED", eventDetails.holdExpiryChanged({ reason: "checkout-started", before: appointment.holdExpiresAt, after: holdExpiresAt, paymentId: payment.id, checkoutExpiresAt: expiresAt, decidedAt: now }));
-    return { kind: "prepared", checkout: { paymentId: payment.id, appointmentId: appointment.id, amountCents: payment.amountCents, currency: "usd", expiresAt } };
+    return { kind: "prepared", checkout: { paymentId: payment.id, appointmentId: appointment.id, amountCents: payment.amountCents, currency: "usd", expiresAt, leaseToken } };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
