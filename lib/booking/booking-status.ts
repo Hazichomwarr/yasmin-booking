@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 
 import { databaseAccessClock, resolveBookingAccess, type BookingAccessClock, type BookingAccessGrant } from "./access";
 import { MIN_ORIGINAL_HOLD_MS } from "./checkout";
+import { formatSalonAddress, salonAddressSelect } from "./location-address";
 import { salonDateFromDatabase, type SalonDate } from "./salon-calendar";
 
 /**
@@ -132,6 +133,8 @@ export type PublicBookingStatus = {
   /** Only while the hold matters to the customer (awaiting or in-progress payment). */
   holdExpiresAt: Date | null;
   locationName: string;
+  /** The location's currently configured street address (public salon facts only); null when none. */
+  locationAddress: string | null;
   appointmentDate: SalonDate;
   slotTime: string;
   hairstyleName: string | null;
@@ -159,6 +162,7 @@ export async function getAuthorizedBookingStatus(
     canStartCheckout,
     holdExpiresAt: state === "awaiting-payment" || state === "payment-in-progress" ? row.holdExpiresAt : null,
     locationName: row.locationNameSnapshot,
+    locationAddress: formatSalonAddress(row.location),
     appointmentDate: salonDateFromDatabase(row.appointmentDate),
     slotTime: row.slotTimeSnapshot,
     hairstyleName: row.hairstyleNameSnapshot,
@@ -192,6 +196,7 @@ async function readAuthorizedBooking(accessToken: unknown, clock: BookingAccessC
       status: true,
       holdExpiresAt: true,
       locationNameSnapshot: true,
+      location: { select: salonAddressSelect },
       appointmentDate: true,
       slotTimeSnapshot: true,
       hairstyleNameSnapshot: true,

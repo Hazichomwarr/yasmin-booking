@@ -10,7 +10,7 @@ import { apiError, dateLabel, money, postJson, timeLabel, zoneLabel } from "./bo
 import styles from "./BookingExperience.module.css";
 
 type Availability = {
-  location: { id: string; name: string; timeZone: string };
+  location: { id: string; name: string; address: string | null; timeZone: string };
   dates: Array<{ date: string; slots: Array<{ id: string; time: string; availability: "available" | "limited" | "full"; available: boolean }> }>;
   pricing: { totalPriceCents: number; depositAmountCents: number; balanceDueCents: number };
 };
@@ -117,7 +117,7 @@ export function BookingExperience({ hairstyles, consentWording }: Props) {
 
   return (
     <main className={styles.page}>
-      <Header locationName={availability.location.name} />
+      <Header place={availability.location.address ?? availability.location.name} />
       <section className={styles.panel} aria-labelledby="booking-title">
         <p className={styles.eyebrow}>STEP {step} OF 3</p>
         <h1 id="booking-title" ref={heading} tabIndex={-1}>{step === 1 ? "Choose your time" : step === 2 ? "Your details" : "Review and pay"}</h1>
@@ -136,7 +136,7 @@ export function BookingExperience({ hairstyles, consentWording }: Props) {
             </div>
           </fieldset>
           <fieldset>
-            <legend>Time <span className={styles.hint}>({zone}, {availability.location.name})</span></legend>
+            <legend>Time <span className={styles.hint}>({zone})</span></legend>
             <div className={styles.slots}>
               {selectedDate?.slots.map((slot) => (
                 <button type="button" key={slot.id} disabled={!slot.available} aria-pressed={slot.id === slotId} className={slot.id === slotId ? styles.selected : ""} onClick={() => setSlotId(slot.id)}>
@@ -187,7 +187,7 @@ export function BookingExperience({ hairstyles, consentWording }: Props) {
         {step === 3 && <form onSubmit={pay}>
           <dl className={styles.review}>
             <dt>Appointment</dt><dd>{dateLabel(date, "long")} at {selectedSlot ? timeLabel(selectedSlot.time) : ""} {zone}</dd>
-            <dt>Location</dt><dd>{availability.location.name}</dd>
+            <dt>Location</dt><dd>{availability.location.address ?? availability.location.name}</dd>
             {details.hairstyleId && <><dt>Hairstyle</dt><dd>{hairstyles.find((style) => style.id === details.hairstyleId)?.name}</dd></>}
             <dt>Name</dt><dd>{details.name.trim()}</dd>
             <dt>Total</dt><dd>{money(availability.pricing.totalPriceCents)}</dd>
@@ -211,8 +211,9 @@ async function fetchAvailability(): Promise<Availability> {
   return (await response.json() as { availability: Availability }).availability;
 }
 
-function Header({ locationName }: { locationName?: string }) {
-  return <header className={styles.header}><Link href="/" className={styles.brand}>YASMIN’S BEAUTY SALON</Link>{locationName && <span>{locationName}</span>}</header>;
+/** `place`: the location's configured street address, or its name when none is configured. */
+function Header({ place }: { place?: string }) {
+  return <header className={styles.header}><Link href="/" className={styles.brand}>YASMIN’S BEAUTY SALON</Link>{place && <address className={styles.place}>{place}</address>}</header>;
 }
 
 function Price({ pricing }: { pricing: Availability["pricing"] }) {

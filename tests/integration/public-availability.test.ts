@@ -100,10 +100,18 @@ describe("public availability (YASMIN-1G)", { skip: integrationSkip }, () => {
     const text = JSON.stringify(availability);
     for (const secret of ["Private Person", "private@example.test", "555 999", customer.id, appointment.id]) assert.equal(text.includes(secret), false, secret);
     assert.deepEqual(Object.keys(availability).sort(), ["dates", "location", "pricing", "salonToday"]);
-    assert.deepEqual(Object.keys(availability.location).sort(), ["id", "name", "timeZone"]);
+    assert.deepEqual(Object.keys(availability.location).sort(), ["address", "id", "name", "timeZone"]);
+    assert.equal(availability.location.address, null);
     assert.deepEqual(Object.keys(availability.dates[0]).sort(), ["date", "slots"]);
     assert.deepEqual(Object.keys(availability.dates[0].slots[0]).sort(), ["availability", "available", "id", "time"]);
     for (const word of ["capacity", "consumed", "remaining", "Payment", "customer", "email"]) assert.equal(text.toLowerCase().includes(word.toLowerCase()), false, word);
+  });
+
+  it("returns the configured street address separately from the location name", async () => {
+    const { location } = await createLocation({ name: "William Street" });
+    await prisma.salonLocation.update({ where: { id: location.id }, data: { addressLine1: "524 William St", city: "East Orange", state: "NJ" } });
+    const availability = await getPublicAvailability({ now: NOW });
+    assert.deepEqual([availability.location.name, availability.location.address], ["William Street", "524 William St, East Orange, NJ"]);
   });
 
   it("fails closed when no location, or more than one, takes online bookings", async () => {

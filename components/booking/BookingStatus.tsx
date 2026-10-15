@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { apiError, dateLabel, money, postJson, timeLabel } from "./booking-format";
 import styles from "./BookingExperience.module.css";
 
-type Status = { state: string; canStartCheckout: boolean; holdExpiresAt: string | null; locationName: string; appointmentDate: string; slotTime: string; hairstyleName: string | null; totalPriceCents: number; depositAmountCents: number; balanceDueCents: number; depositPaid: boolean };
+type Status = { state: string; canStartCheckout: boolean; holdExpiresAt: string | null; locationName: string; locationAddress: string | null; appointmentDate: string; slotTime: string; hairstyleName: string | null; totalPriceCents: number; depositAmountCents: number; balanceDueCents: number; depositPaid: boolean };
 
 type StatusResult = { kind: "found"; booking: Status } | { kind: "missing" } | { kind: "error"; message: string };
 
@@ -104,7 +104,7 @@ export function BookingStatus({ returnedFrom }: { returnedFrom: "success" | "can
           <h1 id="status-title">{heading(booking.state, returnedFrom)}</h1>
           <dl className={styles.review}>
             <dt>Appointment</dt><dd>{dateLabel(booking.appointmentDate, "long")} at {timeLabel(booking.slotTime)}</dd>
-            <dt>Location</dt><dd>{booking.locationName}</dd>
+            <dt>Location</dt><dd>{booking.locationAddress ?? booking.locationName}</dd>
             {booking.hairstyleName && <><dt>Hairstyle</dt><dd>{booking.hairstyleName}</dd></>}
             <dt>Total</dt><dd>{money(booking.totalPriceCents)}</dd>
             <dt>{booking.depositPaid ? "Deposit paid" : "Deposit"}</dt><dd>{money(booking.depositAmountCents)}</dd>

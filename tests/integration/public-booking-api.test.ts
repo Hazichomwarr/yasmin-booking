@@ -238,7 +238,7 @@ describe("public booking API", { skip: integrationSkip }, () => {
       })));
       assert.equal(response.status, 200);
       assert.deepEqual(Object.keys(response.json.booking).sort(), [
-        "appointmentDate", "balanceDueCents", "canStartCheckout", "depositAmountCents", "depositPaid", "hairstyleName", "holdExpiresAt", "locationName", "slotTime", "state", "totalPriceCents",
+        "appointmentDate", "balanceDueCents", "canStartCheckout", "depositAmountCents", "depositPaid", "hairstyleName", "holdExpiresAt", "locationAddress", "locationName", "slotTime", "state", "totalPriceCents",
       ]);
       assert.equal(response.json.booking.state, "awaiting-payment");
       assert.equal((await status(h, { cookie: b, ip: "203.0.113.12" })).json.booking.state, "cancelled");

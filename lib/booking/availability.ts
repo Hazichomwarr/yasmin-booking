@@ -14,6 +14,7 @@ import {
   remainingCapacity,
 } from "./capacity";
 import { BookingError } from "./errors";
+import { formatSalonAddress, salonAddressSelect } from "./location-address";
 import { v1BookingPriceSnapshot } from "./pricing";
 import {
   addSalonDays,
@@ -25,7 +26,8 @@ import {
 } from "./salon-calendar";
 
 export type PublicAvailability = {
-  location: { id: string; name: string; timeZone: string };
+  /** `address` is the configured street address (null when none); `name` stays separate. */
+  location: { id: string; name: string; address: string | null; timeZone: string };
   salonToday: SalonDate;
   dates: Array<{
     date: SalonDate;
@@ -181,7 +183,7 @@ export async function getPublicAvailability(options: { now?: Date } = {}): Promi
   const now = options.now ?? (await prisma.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`)[0].now;
   const locations = await prisma.salonLocation.findMany({
     where: { isActive: true, acceptsOnlineBooking: true },
-    select: { id: true, name: true, timeZone: true, isActive: true, acceptsOnlineBooking: true },
+    select: { id: true, name: true, timeZone: true, isActive: true, acceptsOnlineBooking: true, ...salonAddressSelect },
   });
   if (locations.length !== 1) throw new BookingError("LOCATION_NOT_BOOKABLE", "Online booking location is not uniquely configured.");
   const location = locations[0];
@@ -225,7 +227,7 @@ export async function getPublicAvailability(options: { now?: Date } = {}): Promi
   }
 
   return {
-    location: { id: location.id, name: location.name, timeZone: location.timeZone },
+    location: { id: location.id, name: location.name, address: formatSalonAddress(location), timeZone: location.timeZone },
     salonToday: today,
     dates,
     pricing: v1BookingPriceSnapshot(),

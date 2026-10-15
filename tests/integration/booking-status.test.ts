@@ -22,6 +22,7 @@ const STATUS_KEYS = [
   "depositPaid",
   "hairstyleName",
   "holdExpiresAt",
+  "locationAddress",
   "locationName",
   "slotTime",
   "state",
@@ -95,6 +96,7 @@ describe("authorized booking status", { skip: integrationSkip }, () => {
     assert.equal(status.canStartCheckout, true);
     assert.deepEqual(status.holdExpiresAt, created.booking.holdExpiresAt);
     assert.equal(status.locationName, created.booking.locationName);
+    assert.equal(status.locationAddress, null);
     assert.equal(status.appointmentDate, upcomingPublicBookingDate());
     assert.equal(status.slotTime, created.booking.slotTime);
     assert.match(status.slotTime, /^\d{2}:\d{2}$/);
@@ -130,6 +132,14 @@ describe("authorized booking status", { skip: integrationSkip }, () => {
       assert.ok(!json.includes(secret), `leaked ${secret}`);
     }
     assert.equal(status.state, "payment-in-progress");
+  });
+
+  it("reports the location's configured street address separately from its name", async () => {
+    const created = await book();
+    await prisma.salonLocation.updateMany({ data: { addressLine1: "524 William St", city: "East Orange", state: "NJ" } });
+    const status = await getAuthorizedBookingStatus(created.accessToken);
+    assert.equal(status.locationAddress, "524 William St, East Orange, NJ");
+    assert.equal(status.locationName, "Status Street");
   });
 
   it("is isolated to the credential's booking", async () => {

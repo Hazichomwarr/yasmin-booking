@@ -8,6 +8,15 @@ const williamStreetSlots = [
   { localStartTime: "14:00", capacity: 10 },
 ];
 
+/** Shown to customers as "524 William St, East Orange, NJ" (no postal code configured). */
+const williamStreetAddress = {
+  addressLine1: "524 William St",
+  addressLine2: null,
+  city: "East Orange",
+  state: "NJ",
+  postalCode: null,
+};
+
 function timeOfDay(time: string) {
   return new Date(`1970-01-01T${time}:00.000Z`);
 }
@@ -17,12 +26,14 @@ async function main() {
     where: { id: "william-street" },
     update: {
       name: "William Street",
+      ...williamStreetAddress,
       acceptsOnlineBooking: true,
       timeZone: "America/New_York",
     },
     create: {
       id: "william-street",
       name: "William Street",
+      ...williamStreetAddress,
       acceptsOnlineBooking: true,
       timeZone: "America/New_York",
     },

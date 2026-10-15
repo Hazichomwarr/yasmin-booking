@@ -111,6 +111,7 @@ export function publicStatusBody(status: PublicBookingStatus) {
     canStartCheckout: status.canStartCheckout,
     holdExpiresAt: status.holdExpiresAt?.toISOString() ?? null,
     locationName: status.locationName,
+    locationAddress: status.locationAddress,
     appointmentDate: status.appointmentDate,
     slotTime: status.slotTime,
     hairstyleName: status.hairstyleName,

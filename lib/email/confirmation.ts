@@ -1,5 +1,6 @@
 import type { BookingConfirmationEmail } from "@prisma/client";
 
+import { formatSalonAddress } from "@/lib/booking/location-address";
 import { prisma } from "@/lib/prisma";
 
 /**
@@ -93,7 +94,7 @@ export function confirmationMessage(row: { recipientEmail: string; appointment: 
 } }): ConfirmationMessage {
   const { appointment } = row;
   const { location } = appointment;
-  const address = [location.addressLine1, location.addressLine2, [location.city, location.state, location.postalCode].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  const address = formatSalonAddress(location);
   return {
     to: row.recipientEmail,
     subject: "Your Yasmin's Beauty Salon appointment is confirmed",
