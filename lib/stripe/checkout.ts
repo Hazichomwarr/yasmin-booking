@@ -14,6 +14,8 @@ export type CreatedCheckoutSession = {
   amountCents: number;
   currency: string;
   mode: string;
+  /** Stripe Checkout Session lifecycle state; required for reuse decisions. */
+  status: string;
   expiresAt: Date;
   metadata: { paymentId?: string; appointmentId?: string };
 };
@@ -56,6 +58,9 @@ export function createStripeCheckoutAdapter(
       amountCents: session.amount_total ?? -1,
       currency: session.currency ?? "",
       mode: session.mode ?? "",
+      // A missing provider status is deliberately represented as unknown so
+      // recovery remains conservative instead of treating it as reusable.
+      status: session.status ?? "unknown",
       expiresAt: new Date(session.expires_at * 1000),
       metadata: {
         paymentId: session.metadata?.paymentId,

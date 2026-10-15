@@ -48,10 +48,10 @@ export async function startBookingDepositCheckout(
 ): Promise<CheckoutStartResult> {
   const prepared = await prepareCheckout(appointmentId, clock, grant);
   if (prepared.kind === "existing") {
-    const session = await adapter.retrieveDepositCheckout(prepared.checkoutSessionId);
-    if (!sessionMatchesPayment(session, prepared)) {
-      throw new Error("Stored Stripe Checkout Session does not match payment facts.");
-    }
+    let session;
+    try { session = await adapter.retrieveDepositCheckout(prepared.checkoutSessionId); } catch { return { kind: "ambiguous", paymentId: prepared.paymentId }; }
+    if (!sessionMatchesPayment(session, prepared) || session.status !== "open" || session.expiresAt.getTime() <= (await clock.now()).getTime()) return { kind: "ambiguous", paymentId: prepared.paymentId };
+    if (!await canReturnExistingSession(prepared, session.id, clock, grant)) return { kind: "ambiguous", paymentId: prepared.paymentId };
     return { kind: "ready", paymentId: prepared.paymentId, checkoutUrl: session.url, expiresAt: session.expiresAt };
   }
   if (prepared.kind !== "prepared") return prepared;
@@ -118,6 +118,37 @@ function sessionMatchesPayment(
     && session.expiresAt.getTime() === payment.expiresAt.getTime()
     && session.metadata.paymentId === payment.paymentId
     && session.metadata.appointmentId === payment.appointmentId;
+}
+
+/**
+ * Provider retrieval intentionally happens outside a database transaction.
+ * Before exposing its URL, take the established Appointment -> Payment locks
+ * again so cancellation, fulfillment, and access revocation win safely.
+ */
+async function canReturnExistingSession(
+  prepared: Extract<Awaited<ReturnType<typeof prepareCheckout>>, { kind: "existing" }>,
+  sessionId: string,
+  clock: CheckoutClock,
+  grant?: BookingAccessGrant,
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const appointment = await lockAppointment(tx, prepared.appointmentId);
+    if (grant) await assertBookingAccessUnderLock(tx, grant);
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "Payment" WHERE "id" = ${prepared.paymentId} FOR UPDATE
+    `;
+    if (locked.length === 0) return false;
+    const payment = await tx.payment.findUniqueOrThrow({
+      where: { id: prepared.paymentId },
+      select: { providerCheckoutSessionId: true, status: true },
+    });
+    const now = await clock.now(tx);
+    return appointment.status === "PENDING_PAYMENT"
+      && appointment.holdExpiresAt !== null
+      && appointment.holdExpiresAt.getTime() > now.getTime()
+      && payment.status === "PENDING"
+      && payment.providerCheckoutSessionId === sessionId;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
 
 async function prepareCheckout(appointmentId: string, clock: CheckoutClock, grant?: BookingAccessGrant): Promise<{ kind: "prepared"; checkout: PreparedCheckout } | { kind: "existing"; paymentId: string; appointmentId: string; checkoutSessionId: string; amountCents: number; expiresAt: Date } | CheckoutStartResult> {

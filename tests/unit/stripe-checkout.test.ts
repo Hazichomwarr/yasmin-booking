@@ -28,6 +28,7 @@ function session(overrides: Partial<Stripe.Checkout.Session> = {}) {
     amount_total: input.amountCents,
     currency: "usd",
     mode: "payment",
+    status: "open",
     expires_at: Math.floor(input.expiresAt.getTime() / 1_000),
     metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId },
     ...overrides,
@@ -101,5 +102,14 @@ describe("Stripe Checkout adapter", () => {
       adapterWith(captured, session({ url: null })).createDepositCheckout(input),
       /without an id or URL/,
     );
+  });
+
+  it("preserves provider status and conservatively labels an omitted status unknown", async () => {
+    const captured: Captured[] = [];
+    const open = await adapterWith(captured, session({ status: "open" })).retrieveDepositCheckout("cs_test_123");
+    const unknown = await adapterWith(captured, session({ status: null })).retrieveDepositCheckout("cs_test_123");
+
+    assert.equal(open.status, "open");
+    assert.equal(unknown.status, "unknown");
   });
 });

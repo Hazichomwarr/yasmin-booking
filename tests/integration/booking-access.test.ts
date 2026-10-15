@@ -77,6 +77,7 @@ function stripeDouble(): StripeCheckoutAdapter {
         amountCents: input.amountCents,
         currency: input.currency,
         mode: "payment",
+        status: "open",
         expiresAt: input.expiresAt,
         metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId },
       };

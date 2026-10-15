@@ -9,7 +9,7 @@ import { BookingAccessError } from "@/lib/booking/errors";
 import { applyVerifiedCheckoutSession } from "@/lib/booking/payment-fulfillment";
 import { verifiedCheckoutEvidence } from "@/lib/booking/payment-policy";
 import { prisma } from "@/lib/prisma";
-import type { StripeCheckoutAdapter } from "@/lib/stripe/checkout";
+import type { CreatedCheckoutSession, StripeCheckoutAdapter } from "@/lib/stripe/checkout";
 
 import { WEEK, createCustomer, createLocation, insertAppointment } from "../support/booking-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
@@ -26,6 +26,7 @@ function stripeDouble(mode: "success" | "timeout" = "success") {
         amountCents: input.amountCents,
         currency: input.currency,
         mode: "payment",
+        status: "open",
         expiresAt: input.expiresAt,
         metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId },
       };
@@ -73,6 +74,51 @@ async function checkoutSnapshot(appointmentId: string) {
 const fixedClock = (now: Date): CheckoutClock => ({ now: async () => new Date(now) });
 const sequenceClock = (...times: Date[]): CheckoutClock => ({ now: async () => new Date(times[Math.min(times.length - 1, sequenceClockIndex++)]) });
 let sequenceClockIndex = 0;
+
+async function persistedCheckoutSession() {
+  const hold = await heldAppointment();
+  const created = stripeDouble();
+  const result = await startBookingDepositCheckout(hold.appointmentId, created.adapter);
+  assert.equal(result.kind, "ready");
+  const payment = await prisma.payment.findUniqueOrThrow({
+    where: { appointmentId_purpose: { appointmentId: hold.appointmentId, purpose: "BOOKING_DEPOSIT" } },
+  });
+  return { hold, payment, result };
+}
+
+function recoveredSessionAdapter(
+  session: CreatedCheckoutSession | Error,
+  counters: { create: number; retrieve: number },
+): StripeCheckoutAdapter {
+  return {
+    async createDepositCheckout() {
+      counters.create += 1;
+      throw new Error("recovery must not create a replacement Session");
+    },
+    async retrieveDepositCheckout() {
+      counters.retrieve += 1;
+      if (session instanceof Error) throw session;
+      return session;
+    },
+  };
+}
+
+function sessionFacts(
+  payment: { id: string; appointmentId: string; amountCents: number; providerCheckoutExpiresAt: Date | null; providerCheckoutSessionId: string | null },
+  overrides: Partial<CreatedCheckoutSession> = {},
+): CreatedCheckoutSession {
+  return {
+    id: payment.providerCheckoutSessionId!,
+    url: "https://checkout.example.test/recovered",
+    amountCents: payment.amountCents,
+    currency: "usd",
+    mode: "payment",
+    status: "open",
+    expiresAt: payment.providerCheckoutExpiresAt!,
+    metadata: { paymentId: payment.id, appointmentId: payment.appointmentId },
+    ...overrides,
+  };
+}
 
 describe("checkout initiation", { skip: integrationSkip }, () => {
   useCleanTestDatabase();
@@ -127,7 +173,7 @@ describe("checkout initiation", { skip: integrationSkip }, () => {
   it("treats malformed provider facts as ambiguous and never persists a Session", async () => {
     const hold = await heldAppointment(); let calls = 0;
     const adapter: StripeCheckoutAdapter = {
-      async createDepositCheckout(input) { calls += 1; return { id: "cs_malformed", url: "https://checkout.example.test/malformed", amountCents: input.amountCents + 1, currency: "usd", mode: "payment", expiresAt: input.expiresAt, metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId } }; },
+      async createDepositCheckout(input) { calls += 1; return { id: "cs_malformed", url: "https://checkout.example.test/malformed", amountCents: input.amountCents + 1, currency: "usd", mode: "payment", status: "open", expiresAt: input.expiresAt, metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId } }; },
       async retrieveDepositCheckout() { throw new Error("not used"); },
     };
     const result = await startBookingDepositCheckout(hold.appointmentId, adapter); assert.equal(result.kind, "ambiguous");
@@ -164,7 +210,7 @@ describe("checkout initiation", { skip: integrationSkip }, () => {
       async createDepositCheckout(input) {
         created();
         await pause;
-        return { id: `cs_cancel_${input.paymentId}`, url: "https://checkout.example.test/cancel", amountCents: input.amountCents, currency: "usd", mode: "payment", expiresAt: input.expiresAt, metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId } };
+        return { id: `cs_cancel_${input.paymentId}`, url: "https://checkout.example.test/cancel", amountCents: input.amountCents, currency: "usd", mode: "payment", status: "open", expiresAt: input.expiresAt, metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId } };
       },
       async retrieveDepositCheckout() { throw new Error("not used"); },
     };
@@ -186,7 +232,7 @@ describe("checkout initiation", { skip: integrationSkip }, () => {
     const hold = await heldAppointment();
     const adapter: StripeCheckoutAdapter = {
       async createDepositCheckout(input) {
-        return { id: `cs_fulfilled_${input.paymentId}`, url: "https://checkout.example.test/fulfilled", amountCents: input.amountCents, currency: input.currency, mode: "payment", expiresAt: input.expiresAt, metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId } };
+        return { id: `cs_fulfilled_${input.paymentId}`, url: "https://checkout.example.test/fulfilled", amountCents: input.amountCents, currency: input.currency, mode: "payment", status: "open", expiresAt: input.expiresAt, metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId } };
       },
       async retrieveDepositCheckout() { throw new Error("not used"); },
       async afterCreateBeforePersistence(session, input) {
@@ -395,5 +441,108 @@ describe("checkout initiation", { skip: integrationSkip }, () => {
     const { slot } = await createLocation(); const customer = await createCustomer(); const now = new Date("2027-03-01T15:00:00.000Z");
     const appointment = await insertAppointment({ slot, customerId: customer.id, appointmentDate: WEEK.tuesday, status: "PENDING_PAYMENT", holdExpiresAt: now }); const stripe = stripeDouble();
     await assert.rejects(startBookingDepositCheckout(appointment.id, stripe.adapter, fixedClock(now))); assert.equal(await prisma.payment.count({ where: { appointmentId: appointment.id } }), 0); assert.equal(stripe.calls(), 0);
+  });
+
+  it("reuses only a valid, unexpired OPEN provider Session", async () => {
+    const { hold, payment } = await persistedCheckoutSession();
+    const counters = { create: 0, retrieve: 0 };
+    const adapter = recoveredSessionAdapter(sessionFacts(payment), counters);
+    const result = await startBookingDepositCheckout(
+      hold.appointmentId,
+      adapter,
+      fixedClock(new Date(payment.providerCheckoutExpiresAt!.getTime() - 1)),
+    );
+    assert.equal(result.kind, "ready");
+    assert.equal(counters.create, 0);
+    assert.equal(counters.retrieve, 1);
+  });
+
+  it("treats unusable provider Session recovery states as ambiguous without changing local facts", async () => {
+    const cases: Array<{ name: string; session: (payment: Awaited<ReturnType<typeof persistedCheckoutSession>>["payment"]) => CreatedCheckoutSession | Error; clock?: (payment: Awaited<ReturnType<typeof persistedCheckoutSession>>["payment"]) => CheckoutClock }> = [
+      { name: "missing URL", session: () => new Error("Stripe returned a Checkout Session without an id or URL.") },
+      { name: "expired open Session", session: (payment) => sessionFacts(payment, { expiresAt: new Date(payment.providerCheckoutExpiresAt!.getTime() - 1) }) },
+      { name: "expired provider Session", session: (payment) => sessionFacts(payment, { status: "expired" }) },
+      { name: "complete but unfulfilled provider Session", session: (payment) => sessionFacts(payment, { status: "complete" }) },
+      { name: "unknown provider Session", session: (payment) => sessionFacts(payment, { status: "unrecognized" }) },
+      { name: "provider retrieval network failure", session: () => new Error("simulated network failure") },
+      { name: "inconsistent provider metadata", session: (payment) => sessionFacts(payment, { metadata: { paymentId: "wrong", appointmentId: payment.appointmentId } }) },
+    ];
+    for (const scenario of cases) {
+      const { hold, payment } = await persistedCheckoutSession();
+      const before = await checkoutSnapshot(hold.appointmentId);
+      const counters = { create: 0, retrieve: 0 };
+      const clock = scenario.clock?.(payment) ?? fixedClock(new Date(payment.providerCheckoutExpiresAt!.getTime() - 1));
+      const result = await startBookingDepositCheckout(hold.appointmentId, recoveredSessionAdapter(scenario.session(payment), counters), clock);
+      assert.equal(result.kind, "ambiguous", scenario.name);
+      const after = await checkoutSnapshot(hold.appointmentId);
+      assert.equal(counters.create, 0, scenario.name);
+      assert.equal(after.payments.length, 1, scenario.name);
+      assert.equal(after.payments[0].providerCheckoutSessionId, before.payments[0].providerCheckoutSessionId, scenario.name);
+      assert.equal(after.payments[0].amountCents, before.payments[0].amountCents, scenario.name);
+      assert.equal(after.appointment.holdExpiresAt?.getTime(), before.appointment.holdExpiresAt?.getTime(), scenario.name);
+      assert.equal(after.events.filter((event) => event.type === "HOLD_EXPIRY_CHANGED").length, 1, scenario.name);
+    }
+  });
+
+  it("does not reuse an OPEN Session at its exact provider expiration boundary", async () => {
+    const { hold, payment } = await persistedCheckoutSession();
+    const counters = { create: 0, retrieve: 0 };
+    const result = await startBookingDepositCheckout(hold.appointmentId, recoveredSessionAdapter(sessionFacts(payment), counters), fixedClock(payment.providerCheckoutExpiresAt!));
+    assert.equal(result.kind, "ambiguous");
+    assert.equal(counters.create, 0);
+  });
+
+  it("does not return a Session URL after local verified fulfillment", async () => {
+    const { hold, payment } = await persistedCheckoutSession();
+    await applyVerifiedCheckoutSession(verifiedCheckoutEvidence({ checkoutSessionId: payment.providerCheckoutSessionId!, sessionStatus: "complete", paymentStatus: "paid", paymentIntentId: `pi_recovered_${payment.id}`, amountCents: payment.amountCents, currency: "usd", paidAt: new Date(), metadataPaymentId: payment.id, metadataAppointmentId: hold.appointmentId }));
+    const counters = { create: 0, retrieve: 0 };
+    await assert.rejects(startBookingDepositCheckout(hold.appointmentId, recoveredSessionAdapter(sessionFacts(payment, { status: "complete" }), counters)), /not eligible/);
+    assert.equal(counters.retrieve, 0);
+    assert.equal(counters.create, 0);
+  });
+
+  it("serializes authorized OPEN-Session recovery without a replacement Session", async () => {
+    const { hold, payment } = await persistedCheckoutSession();
+    const access = await prisma.$transaction((tx) => issueBookingAccess(tx, hold.appointmentId));
+    const counters = { create: 0, retrieve: 0 };
+    const adapter = recoveredSessionAdapter(sessionFacts(payment), counters);
+    const clock = fixedClock(new Date(payment.providerCheckoutExpiresAt!.getTime() - 1));
+    const results = await Promise.all([
+      startAuthorizedBookingCheckout(access.token, { adapter, clock }),
+      startAuthorizedBookingCheckout(access.token, { adapter, clock }),
+    ]);
+    assert.deepEqual(results.map((result) => result.kind), ["ready", "ready"]);
+    assert.equal(counters.create, 0);
+    assert.equal(await prisma.payment.count({ where: { appointmentId: hold.appointmentId } }), 1);
+    assert.equal(await prisma.appointmentEvent.count({ where: { appointmentId: hold.appointmentId, type: "HOLD_EXPIRY_CHANGED" } }), 1);
+  });
+
+  it("does not return a recovered URL after cancellation, revocation, or fulfillment during provider retrieval", async () => {
+    const actions = ["cancel", "revoke", "fulfill"] as const;
+    for (const action of actions) {
+      const { hold, payment } = await persistedCheckoutSession();
+      const access = await prisma.$transaction((tx) => issueBookingAccess(tx, hold.appointmentId));
+      const counters = { create: 0, retrieve: 0 };
+      let release!: () => void;
+      let retrieved!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const reached = new Promise<void>((resolve) => { retrieved = resolve; });
+      const adapter: StripeCheckoutAdapter = {
+        async createDepositCheckout() { counters.create += 1; throw new Error("must not create"); },
+        async retrieveDepositCheckout() { counters.retrieve += 1; retrieved(); await gate; return sessionFacts(payment); },
+      };
+      const clock = fixedClock(new Date(payment.providerCheckoutExpiresAt!.getTime() - 1));
+      const starting = startAuthorizedBookingCheckout(access.token, { adapter, clock });
+      await reached;
+      if (action === "cancel") await cancelAppointment(hold.appointmentId);
+      if (action === "revoke") await revokeBookingAccess({ appointmentId: hold.appointmentId, reason: "customer-request", actorId: "test-admin" });
+      if (action === "fulfill") await applyVerifiedCheckoutSession(verifiedCheckoutEvidence({ checkoutSessionId: payment.providerCheckoutSessionId!, sessionStatus: "complete", paymentStatus: "paid", paymentIntentId: `pi_race_${payment.id}`, amountCents: payment.amountCents, currency: "usd", paidAt: new Date(), metadataPaymentId: payment.id, metadataAppointmentId: hold.appointmentId }));
+      release();
+      if (action === "revoke") await assert.rejects(starting, BookingAccessError);
+      else assert.equal((await starting).kind, "ambiguous");
+      assert.equal(counters.create, 0, action);
+      assert.equal(await prisma.payment.count({ where: { appointmentId: hold.appointmentId } }), 1, action);
+      assert.equal(await prisma.appointmentEvent.count({ where: { appointmentId: hold.appointmentId, type: "HOLD_EXPIRY_CHANGED" } }), 1, action);
+    }
   });
 });
