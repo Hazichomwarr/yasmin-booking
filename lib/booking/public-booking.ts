@@ -7,11 +7,12 @@ import { prisma } from "@/lib/prisma";
 import { appendAppointmentEvent, eventDetails } from "./appointment-events";
 import { assertBookingAccessUnderLock, issueBookingAccess, resolveBookingAccess, type BookingAccessGrant } from "./access";
 import { isSafeToLeaveBehind } from "./booking-status";
-import { dateClosedReason, locationClosedReason, slotClosedReason } from "./booking-policy";
+import { dateClosedReason, locationClosedReason, publicBookingWindowClosedReason, slotClosedReason } from "./booking-policy";
 import { countConsumedCapacity, lockBookingSlotCapacity, remainingCapacity } from "./capacity";
 import { BookingError } from "./errors";
 import { BOOKING_HOLD_MINUTES } from "./holds";
 import { v1BookingPriceSnapshot } from "./pricing";
+import { PUBLIC_BOOKING_LIMITS as LIMITS, PUBLIC_EMAIL_PATTERN, PUBLIC_PHONE_PATTERN } from "./public-booking-rules";
 import { parseSalonDate, salonClockTimeFromDatabase, salonDateToDatabase } from "./salon-calendar";
 
 export type PublicBookingInput = {
@@ -75,6 +76,9 @@ export async function createPublicBooking(value: unknown, options: PublicBooking
     const location = await tx.salonLocation.findUnique({ where: { id: input.locationId }, select: { id: true, name: true, timeZone: true, isActive: true, acceptsOnlineBooking: true } });
     if (!location) throw new BookingError("LOCATION_NOT_FOUND", "Location does not exist.");
     if (locationClosedReason(location)) throw new BookingError("LOCATION_NOT_BOOKABLE", "Location is not bookable.");
+    // V1 has exactly one online location; an ambiguous configuration closes public booking.
+    const onlineLocations = await tx.salonLocation.count({ where: { isActive: true, acceptsOnlineBooking: true } });
+    if (onlineLocations !== 1) throw new BookingError("LOCATION_NOT_BOOKABLE", "Online booking location is not uniquely configured.");
     const locked = await lockBookingSlotCapacity(tx, input.bookingSlotId);
     const slot = locked ? await tx.bookingSlot.findUnique({ where: { id: input.bookingSlotId }, select: { id: true, locationId: true, localStartTime: true, capacity: true, isActive: true } }) : null;
     if (!slot || slot.locationId !== location.id) throw new BookingError("SLOT_NOT_FOUND", "Slot does not exist at this location.");
@@ -84,6 +88,8 @@ export async function createPublicBooking(value: unknown, options: PublicBooking
     const now = (await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`)[0].now;
     const dateReason = dateClosedReason(date, location, now);
     if (dateReason) throw new BookingError(dateReason, "Appointment date is not bookable.");
+    const windowReason = publicBookingWindowClosedReason(date, salonClockTimeFromDatabase(slot.localStartTime), location, now);
+    if (windowReason) throw new BookingError(windowReason, "This date or time is outside the online booking window.");
     const consumed = await countConsumedCapacity(tx, { bookingSlotId: slot.id, appointmentDate: date }, now);
     if (remainingCapacity(slot.capacity, consumed) === 0) throw new BookingError("CAPACITY_FULL", "Slot is full.");
     const hairstyle = input.hairstyleId ? await tx.hairstyle.findFirst({ where: { id: input.hairstyleId, ...publiclyVisibleHairstyle }, select: { id: true, name: true } }) : null;
@@ -171,9 +177,9 @@ export function parsePublicBookingInput(value: unknown): PublicBookingInput {
     emailMarketingConsent: record.emailMarketingConsent === true,
     smsMarketingConsent: record.smsMarketingConsent === true,
   } as PublicBookingInput;
-  if (normalized.name.length > 120 || normalized.email.length > 254 || normalized.phone.length > 40 || normalized.locationId.length > 191 || normalized.bookingSlotId.length > 191 || (normalized.preferredStylistName?.length ?? 0) > 120 || (normalized.customerNotes?.length ?? 0) > 2_000) throw new PublicBookingValidationError("A field exceeds its maximum length.");
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized.email)) throw new PublicBookingValidationError("Invalid email.");
-  if (!/^\+?[0-9][0-9 .()\-]{5,39}$/.test(normalized.phone)) throw new PublicBookingValidationError("Invalid phone.");
+  if (normalized.name.length > LIMITS.name || normalized.email.length > LIMITS.email || normalized.phone.length > LIMITS.phone || normalized.locationId.length > 191 || normalized.bookingSlotId.length > 191 || (normalized.preferredStylistName?.length ?? 0) > LIMITS.preferredStylistName || (normalized.customerNotes?.length ?? 0) > LIMITS.customerNotes) throw new PublicBookingValidationError("A field exceeds its maximum length.");
+  if (!PUBLIC_EMAIL_PATTERN.test(normalized.email)) throw new PublicBookingValidationError("Invalid email.");
+  if (!PUBLIC_PHONE_PATTERN.test(normalized.phone)) throw new PublicBookingValidationError("Invalid phone.");
   try { parseSalonDate(normalized.appointmentDate); } catch { throw new PublicBookingValidationError("Invalid appointmentDate."); }
   return normalized;
 }

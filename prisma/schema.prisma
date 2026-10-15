@@ -41,6 +41,13 @@ enum PaymentStatus {
   EXPIRED
 }
 
+enum ConfirmationEmailState {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
 /// Why a received charge has not been allocated to its appointment.
 enum PaymentReconciliationReason {
   /// Capacity full or booking policy closed when the place was re-checked.
@@ -208,11 +215,32 @@ model Appointment {
   hairstyle             Hairstyle?         @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
   payments              Payment[]
   events                AppointmentEvent[]
+  confirmationEmail     BookingConfirmationEmail?
 
   @@index([appointmentDate, status])
   @@index([locationId, appointmentDate, bookingSlotId])
   @@index([customerId])
   @@index([holdExpiresAt])
+}
+
+/// Durable post-commit confirmation email intent. One confirmed appointment
+/// can produce one delivery record; provider work is never part of payment
+/// fulfillment's database transaction.
+model BookingConfirmationEmail {
+  id                  String                 @id @default(cuid())
+  appointmentId       String                 @unique
+  recipientEmail      String
+  state               ConfirmationEmailState @default(PENDING)
+  attemptCount        Int                    @default(0)
+  lastAttemptAt       DateTime?
+  sentAt              DateTime?
+  providerMessageId   String?
+  lastError           String?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  appointment         Appointment            @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+
+  @@index([state, createdAt])
 }
 
 // Payment invariants are enforced by CHECK constraints added in migration
@@ -267,6 +295,8 @@ model Payment {
   @@index([appointmentId])
   @@index([status])
   @@index([reconciliationReason])
+  /// Created by migration 20261015000000_checkout_recovery_leases.
+  @@index([checkoutRecoveryLeasedAt])
 }
 
 /// How a verified payment failed to apply locally (mirrors the fulfillment

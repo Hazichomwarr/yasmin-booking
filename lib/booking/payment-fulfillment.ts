@@ -375,6 +375,12 @@ async function fulfill(
       data: { status: decision.transition.to },
     });
     await appendAppointmentEvent(tx, appointment.id, event.type, event.details);
+    const customer = await tx.customer.findUniqueOrThrow({ where: { id: appointment.customerId }, select: { email: true } });
+    // The delivery intent commits with PAYMENT_CONFIRMED; sending happens only
+    // afterwards, from the outbox worker. Unique appointmentId keeps it to one
+    // intent, and skipDuplicates means an existing row can never roll back a
+    // verified confirmation: fulfillment never depends on email.
+    await tx.bookingConfirmationEmail.createMany({ data: [{ appointmentId: appointment.id, recipientEmail: customer.email }], skipDuplicates: true });
     return { kind: "confirmed", ...link, method: decision.method, allocatedAt: decidedAt, decidedAt };
   }
 

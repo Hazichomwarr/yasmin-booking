@@ -161,6 +161,7 @@ export type BookingAccessRevocationReason =
   | "customer-request"
   /** A browser started a replacement booking after this booking was safely finished. */
   | "browser-replacement"
+  | "customer-release"
   /** Any other deliberate staff decision. */
   | "administrative";
 
@@ -212,6 +213,7 @@ const ACCESS_REVOCATION_REASONS: ReadonlySet<string> = new Set<BookingAccessRevo
   "suspected-compromise",
   "customer-request",
   "browser-replacement",
+  "customer-release",
   "administrative",
 ]);
 

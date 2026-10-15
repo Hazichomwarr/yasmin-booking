@@ -11,7 +11,7 @@ import { createPublicBooking } from "@/lib/booking/public-booking";
 import { prisma } from "@/lib/prisma";
 import type { StripeCheckoutAdapter } from "@/lib/stripe/checkout";
 
-import { WEEK, createLocation } from "../support/booking-fixtures";
+import { publicBookingPlace, upcomingPublicBookingDate } from "../support/booking-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
 const STATUS_KEYS = [
@@ -49,14 +49,14 @@ const stripe: StripeCheckoutAdapter = {
 let sequence = 0;
 async function book(options: { name?: string; hairstyle?: boolean } = {}) {
   sequence += 1;
-  const { location, slot } = await createLocation({ name: `Status Street ${sequence}` });
+  const { location, slot } = await publicBookingPlace({ name: "Status Street" });
   return createPublicBooking({
     name: options.name ?? `Status Customer ${sequence}`,
     email: `status${sequence}@example.test`,
     phone: `+1 555 010 ${String(sequence).padStart(4, "0")}`,
     locationId: location.id,
     bookingSlotId: slot.id,
-    appointmentDate: WEEK.tuesday,
+    appointmentDate: upcomingPublicBookingDate(),
     customerNotes: "Private note for the stylist",
     preferredStylistName: "Amina",
   });
@@ -95,8 +95,9 @@ describe("authorized booking status", { skip: integrationSkip }, () => {
     assert.equal(status.canStartCheckout, true);
     assert.deepEqual(status.holdExpiresAt, created.booking.holdExpiresAt);
     assert.equal(status.locationName, created.booking.locationName);
-    assert.equal(status.appointmentDate, WEEK.tuesday);
-    assert.equal(status.slotTime, "11:00");
+    assert.equal(status.appointmentDate, upcomingPublicBookingDate());
+    assert.equal(status.slotTime, created.booking.slotTime);
+    assert.match(status.slotTime, /^\d{2}:\d{2}$/);
     assert.equal(status.hairstyleName, null);
     assert.deepEqual([status.totalPriceCents, status.depositAmountCents, status.balanceDueCents], [20_000, 4_000, 16_000]);
     assert.equal(status.depositPaid, false);

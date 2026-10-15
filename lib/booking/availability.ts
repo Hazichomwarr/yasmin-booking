@@ -5,6 +5,8 @@ import {
   locationClosedReason,
   slotClosedReason,
   type BookingClosedReason,
+  publicBookingWindowClosedReason,
+  ONLINE_BOOKING_HORIZON_DAYS,
 } from "./booking-policy";
 import {
   capacityConsumingAppointments,
@@ -12,12 +14,25 @@ import {
   remainingCapacity,
 } from "./capacity";
 import { BookingError } from "./errors";
+import { v1BookingPriceSnapshot } from "./pricing";
 import {
+  addSalonDays,
   parseSalonDate,
   salonClockTimeFromDatabase,
   salonDateToDatabase,
+  salonToday,
   type SalonDate,
 } from "./salon-calendar";
+
+export type PublicAvailability = {
+  location: { id: string; name: string; timeZone: string };
+  salonToday: SalonDate;
+  dates: Array<{
+    date: SalonDate;
+    slots: Array<{ id: string; time: string; availability: "available" | "limited" | "full"; available: boolean }>;
+  }>;
+  pricing: { totalPriceCents: number; depositAmountCents: number; balanceDueCents: number };
+};
 
 /**
  * Availability reads — INFORMATIONAL ONLY.
@@ -71,7 +86,7 @@ export async function listBookableSlotsForDate(
   input: { locationId: string; appointmentDate: string },
   options: { now?: Date } = {},
 ): Promise<DateAvailability> {
-  const now = options.now ?? new Date();
+  const now = options.now ?? (await prisma.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`)[0].now;
   const appointmentDate = parseSalonDate(input.appointmentDate);
 
   const location = await prisma.salonLocation.findUnique({
@@ -121,7 +136,7 @@ export async function getSlotAvailability(
   input: { locationId: string; bookingSlotId: string; appointmentDate: string },
   options: { now?: Date } = {},
 ): Promise<SlotAvailability> {
-  const now = options.now ?? new Date();
+  const now = options.now ?? (await prisma.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`)[0].now;
   const appointmentDate = parseSalonDate(input.appointmentDate);
 
   const location = await prisma.salonLocation.findUnique({
@@ -148,6 +163,73 @@ export async function getSlotAvailability(
     slotClosedReason(slot);
 
   return describeSlot(slot, consumed, policyReason);
+}
+
+/** Remaining places at or below this are shown as "limited"; exact counts are never public. */
+export const LIMITED_AVAILABILITY_THRESHOLD = 2;
+
+/**
+ * Public, allow-listed availability for the sole configured online location:
+ * salon-local today through the public horizon, weekdays only, with the
+ * same-day cutoff applied. Capacity is reported as a coarse bucket, never as
+ * counts. Informational only: public booking creation locks and rechecks
+ * every fact before it creates a capacity-consuming Appointment.
+ *
+ * Zero or several active online locations → LOCATION_NOT_BOOKABLE.
+ */
+export async function getPublicAvailability(options: { now?: Date } = {}): Promise<PublicAvailability> {
+  const now = options.now ?? (await prisma.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`)[0].now;
+  const locations = await prisma.salonLocation.findMany({
+    where: { isActive: true, acceptsOnlineBooking: true },
+    select: { id: true, name: true, timeZone: true, isActive: true, acceptsOnlineBooking: true },
+  });
+  if (locations.length !== 1) throw new BookingError("LOCATION_NOT_BOOKABLE", "Online booking location is not uniquely configured.");
+  const location = locations[0];
+  const today = salonToday(location.timeZone, now);
+  const lastDate = addSalonDays(today, ONLINE_BOOKING_HORIZON_DAYS);
+
+  const slots = await prisma.bookingSlot.findMany({
+    where: { locationId: location.id, isActive: true },
+    select: { id: true, localStartTime: true, capacity: true },
+    orderBy: [{ localStartTime: "asc" }, { id: "asc" }],
+  });
+  const consumedRows = await prisma.appointment.groupBy({
+    by: ["bookingSlotId", "appointmentDate"],
+    where: {
+      bookingSlotId: { in: slots.map((slot) => slot.id) },
+      appointmentDate: { gte: salonDateToDatabase(today), lte: salonDateToDatabase(lastDate) },
+      ...capacityConsumingAppointments(now),
+    },
+    _count: { _all: true },
+  });
+  const consumed = new Map(consumedRows.map((row) => [`${row.bookingSlotId} ${row.appointmentDate.toISOString().slice(0, 10)}`, row._count._all]));
+
+  const dates: PublicAvailability["dates"] = [];
+  for (let offset = 0; offset <= ONLINE_BOOKING_HORIZON_DAYS; offset += 1) {
+    const date = addSalonDays(today, offset);
+    if (locationClosedReason(location) ?? dateClosedReason(date, location, now)) continue;
+    dates.push({
+      date,
+      slots: slots.map((slot) => {
+        const time = salonClockTimeFromDatabase(slot.localStartTime);
+        const remaining = remainingCapacity(slot.capacity, consumed.get(`${slot.id} ${date}`) ?? 0);
+        const windowReason = publicBookingWindowClosedReason(date, time, location, now);
+        return {
+          id: slot.id,
+          time,
+          availability: remaining === 0 ? "full" : remaining <= LIMITED_AVAILABILITY_THRESHOLD ? "limited" : "available",
+          available: windowReason === null && remaining > 0,
+        };
+      }),
+    });
+  }
+
+  return {
+    location: { id: location.id, name: location.name, timeZone: location.timeZone },
+    salonToday: today,
+    dates,
+    pricing: v1BookingPriceSnapshot(),
+  };
 }
 
 function describeSlot(

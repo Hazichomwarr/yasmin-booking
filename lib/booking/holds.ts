@@ -133,6 +133,8 @@ export async function acquireBookingHold(
       }
 
       // Date policy in the location's own calendar (its timeZone defines "today").
+      // The public booking window (horizon, same-day cutoff) is not applied:
+      // internal holds keep their broader capabilities.
       const dateReason = dateClosedReason(appointmentDate, location, now);
       if (dateReason === "INVALID_APPOINTMENT_DATE") {
         throw new BookingError(dateReason, `${appointmentDate} is before today at ${location.name}.`);

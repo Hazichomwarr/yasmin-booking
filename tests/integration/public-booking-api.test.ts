@@ -19,7 +19,7 @@ import { RateLimitStoreError } from "@/lib/http/rate-limit";
 import { prisma } from "@/lib/prisma";
 import type { StripeCheckoutAdapter } from "@/lib/stripe/checkout";
 
-import { WEEK, createLocation } from "../support/booking-fixtures";
+import { publicBookingPlace, upcomingPublicBookingDate } from "../support/booking-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
 const ORIGIN = "https://book.yasmin.example";
@@ -107,14 +107,14 @@ const tokenFrom = (setCookie: string | null) => {
 let sequence = 0;
 async function bookingInput(overrides: Record<string, unknown> = {}, capacity = 10) {
   sequence += 1;
-  const { location, slot } = await createLocation({ name: `API Street ${sequence}`, slots: [{ time: "11:00", capacity }] });
+  const { location, slot } = await publicBookingPlace({ name: "API Street", capacity });
   return {
     name: `API Customer ${sequence}`,
     email: `api${sequence}@example.test`,
     phone: `+1 555 020 ${String(sequence).padStart(4, "0")}`,
     locationId: location.id,
     bookingSlotId: slot.id,
-    appointmentDate: WEEK.tuesday,
+    appointmentDate: upcomingPublicBookingDate(),
     ...overrides,
   };
 }

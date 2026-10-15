@@ -29,6 +29,7 @@ export const PUBLIC_ERRORS = {
   RATE_LIMITED: { status: 429, message: "Too many requests. Please wait and try again." },
   BOOKING_ACCESS_DENIED: { status: 401, message: "No active booking was found in this browser." },
   ACTIVE_BOOKING_EXISTS: { status: 409, message: "This browser already has a booking in progress." },
+  BOOKING_RELEASE_UNSAFE: { status: 409, message: "This booking cannot be released safely yet. Please wait or contact the salon." },
   SLOT_FULL: { status: 409, message: "This time is no longer available." },
   BOOKING_OPTION_UNAVAILABLE: { status: 409, message: "This booking option is not available." },
   BOOKING_ALREADY_CONFIRMED: { status: 409, message: "This booking is already confirmed." },

@@ -59,6 +59,26 @@ export function salonWeekday(date: SalonDate): Weekday {
   return salonDateToDatabase(date).getUTCDay() as Weekday;
 }
 
+/** Calendar arithmetic for a salon date. UTC is intentional: this is a DATE, not an instant. */
+export function addSalonDays(date: SalonDate, days: number): SalonDate {
+  const value = salonDateToDatabase(date);
+  value.setUTCDate(value.getUTCDate() + days);
+  return salonDateFromDatabase(value);
+}
+
+/** The salon-local wall-clock time at an instant, as a zero-padded HH:mm:ss string. */
+export function salonClockTime(timeZone: string, now: Date): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value;
+  return `${part("hour")}:${part("minute")}:${part("second")}`;
+}
+
 /** Reads a PostgreSQL TIME(0) column value returned by Prisma as "HH:mm". */
 export function salonClockTimeFromDatabase(value: Date): string {
   return value.toISOString().slice(11, 16);

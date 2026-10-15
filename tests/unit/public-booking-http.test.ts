@@ -101,6 +101,9 @@ describe("configuration", () => {
       checkoutIp10m: [30, 10],
       statusCredential1m: [60, 1],
       statusIp1m: [120, 1],
+      availabilityIp1m: [60, 1],
+      releaseCredential10m: [10, 10],
+      releaseIp10m: [30, 10],
     });
     const scopes = Object.values(DEFAULT_RATE_LIMITS).map((r) => r.scope);
     assert.equal(new Set(scopes).size, scopes.length);

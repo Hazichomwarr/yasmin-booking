@@ -1,6 +1,8 @@
-import Stripe from "stripe";
+import type Stripe from "stripe";
 
 import { verifiedCheckoutEvidence, type CheckoutEvidenceInput } from "@/lib/booking/payment-policy";
+
+import { stripeClient } from "./client";
 
 /** The only Checkout events this application needs for payment fulfillment. */
 export const STRIPE_CHECKOUT_EVENT_TYPES = new Set([
@@ -16,7 +18,7 @@ export type StripeWebhookGateway = {
 };
 
 export function stripeWebhookGateway(secretKey: string): StripeWebhookGateway {
-  const stripe = new Stripe(secretKey);
+  const stripe = stripeClient(secretKey);
   return {
     constructEvent(payload, signature, webhookSecret) {
       return stripe.webhooks.constructEvent(payload, signature, webhookSecret);

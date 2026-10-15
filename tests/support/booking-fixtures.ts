@@ -22,6 +22,39 @@ export const WEEK = {
   sunday: "2027-03-14",
 } as const;
 
+/** An upcoming weekday for public-booking tests that use the live database clock. */
+export function upcomingPublicBookingDate(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((value) => value.type === type)?.value;
+  const date = new Date(`${part("year")}-${part("month")}-${part("day")}T00:00:00.000Z`);
+  for (let offset = 1; offset <= 30; offset += 1) {
+    const candidate = new Date(date.getTime());
+    candidate.setUTCDate(candidate.getUTCDate() + offset);
+    const weekday = candidate.getUTCDay();
+    if (weekday >= 1 && weekday <= 5) return candidate.toISOString().slice(0, 10);
+  }
+  throw new Error("No upcoming weekday in the public booking horizon.");
+}
+
+let publicSlotSequence = 0;
+
+/**
+ * A slot at THE online location for public-booking tests. V1 public booking
+ * requires exactly one active online location, so every call within a test
+ * reuses it (creating it on first use) and adds its own slot (distinct times
+ * from 09:00, each with `capacity`).
+ */
+export async function publicBookingPlace(options: { capacity?: number; name?: string; timeZone?: string } = {}) {
+  const existing = await prisma.salonLocation.findFirst({ where: { isActive: true, acceptsOnlineBooking: true } });
+  const location = existing ?? (await createLocation({ name: options.name ?? "Public Street", timeZone: options.timeZone, slots: [] })).location;
+  publicSlotSequence = (publicSlotSequence + 1) % 600;
+  const time = `${String(9 + Math.floor(publicSlotSequence / 60)).padStart(2, "0")}:${String(publicSlotSequence % 60).padStart(2, "0")}`;
+  const slot = await prisma.bookingSlot.create({
+    data: { locationId: location.id, localStartTime: new Date(`1970-01-01T${time}:00.000Z`), capacity: options.capacity ?? 10 },
+  });
+  return { location, slot };
+}
+
 export const seconds = (n: number) => n * 1000;
 
 type SlotSpec = { time: string; capacity?: number; isActive?: boolean };

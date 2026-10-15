@@ -74,8 +74,10 @@ export {
 
 export {
   getSlotAvailability,
+  getPublicAvailability,
   listBookableSlotsForDate,
   type DateAvailability,
+  type PublicAvailability,
   type SlotAvailability,
 } from "./availability";
 

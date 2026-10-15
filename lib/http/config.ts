@@ -33,6 +33,9 @@ export const DEFAULT_RATE_LIMITS = {
   checkoutIp10m: { scope: "checkout.ip.10m", limit: 30, windowMs: 10 * MINUTE },
   statusCredential1m: { scope: "status.credential.1m", limit: 60, windowMs: MINUTE },
   statusIp1m: { scope: "status.ip.1m", limit: 120, windowMs: MINUTE },
+  availabilityIp1m: { scope: "availability.ip.1m", limit: 60, windowMs: MINUTE },
+  releaseCredential10m: { scope: "release.credential.10m", limit: 10, windowMs: 10 * MINUTE },
+  releaseIp10m: { scope: "release.ip.10m", limit: 30, windowMs: 10 * MINUTE },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RateLimitName = keyof typeof DEFAULT_RATE_LIMITS;

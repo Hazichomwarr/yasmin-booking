@@ -1,3 +1,20 @@
-import Link from "next/link";
-import styles from "./page.module.css";
-export default function BookingPlaceholder(){return <main className={styles.main}><p className={styles.eyebrow}>YASMIN’S BEAUTY SALON</p><h1 className={styles.title}>Online booking<br/>coming soon.</h1><Link className={styles.link} href="/">Return home</Link></main>}
+import { connection } from "next/server";
+
+import { BookingExperience } from "@/components/booking/BookingExperience";
+import { BookingUnavailable } from "@/components/booking/BookingUnavailable";
+import { listPublicHairstyles } from "@/lib/catalog";
+import { CURRENT_MARKETING_CONSENT_WORDING } from "@/lib/customers/marketing-consent";
+import { isPublicBookingEnabled } from "@/lib/http/config";
+
+export default async function BookPage() {
+  // Request time only: the flag and the catalog are never baked in at build.
+  await connection();
+  if (!isPublicBookingEnabled(process.env)) return <BookingUnavailable />;
+  const hairstyles = (await listPublicHairstyles()).map(({ id, name }) => ({ id, name }));
+  return (
+    <BookingExperience
+      hairstyles={hairstyles}
+      consentWording={{ email: CURRENT_MARKETING_CONSENT_WORDING.EMAIL.text, sms: CURRENT_MARKETING_CONSENT_WORDING.SMS.text }}
+    />
+  );
+}

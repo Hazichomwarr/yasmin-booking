@@ -1,4 +1,6 @@
 import { resolveBookingAccess } from "@/lib/booking/access";
+import { getPublicAvailability } from "@/lib/booking/availability";
+import { releaseAuthorizedPublicBooking, PublicBookingReleaseConflictError } from "@/lib/booking/public-release";
 import { getAuthorizedBookingStatus, type PublicBookingStatus } from "@/lib/booking/booking-status";
 import { startAuthorizedBookingCheckout, type CheckoutAmbiguityReason, type CheckoutStartResult } from "@/lib/booking/checkout";
 import { isBookingAccessError, isBookingError } from "@/lib/booking/errors";
@@ -38,7 +40,7 @@ export const MAX_BOOKING_BODY_BYTES = 8 * 1024;
 export const MAX_CHECKOUT_BODY_BYTES = 1024;
 const CHECKOUT_RETRY_AFTER_SECONDS = 5;
 
-export type PublicApiRoute = "bookings.create" | "bookings.checkout" | "bookings.status";
+export type PublicApiRoute = "bookings.create" | "bookings.checkout" | "bookings.status" | "bookings.availability" | "bookings.release";
 
 /** Only enumerable, non-sensitive facts. */
 export type PublicApiLogEntry = {
@@ -55,6 +57,8 @@ export type PublicBookingApiDeps = {
   createBooking: (input: PublicBookingInput, options?: PublicBookingCreateOptions) => Promise<PublicBookingResult>;
   startCheckout: (accessToken: string) => Promise<CheckoutStartResult>;
   getStatus: (accessToken: string) => Promise<PublicBookingStatus>;
+  getAvailability: () => ReturnType<typeof getPublicAvailability>;
+  releaseBooking: (accessToken: string) => ReturnType<typeof releaseAuthorizedPublicBooking>;
   /** Legacy test seam; replacement safety is now checked transactionally. */
   canReplaceBooking?: (accessToken: string) => Promise<boolean>;
   consumeRateLimits: (checks: readonly RateLimitCheck[], secret: string) => Promise<RateLimitDecision>;
@@ -66,6 +70,8 @@ export const defaultPublicBookingApiDeps: PublicBookingApiDeps = {
   createBooking: createPublicBooking,
   startCheckout: (token) => startAuthorizedBookingCheckout(token),
   getStatus: (token) => getAuthorizedBookingStatus(token),
+  getAvailability: getPublicAvailability,
+  releaseBooking: releaseAuthorizedPublicBooking,
   consumeRateLimits: (checks, secret) => consumeRateLimits(checks, { secret }),
   log: (entry) => console.info(JSON.stringify({ event: "public-booking-api", ...entry })),
 };
@@ -301,7 +307,48 @@ export function createPublicBookingApi(deps: PublicBookingApiDeps = defaultPubli
     }
   }
 
-  return { createBooking, startCheckout, getStatus };
+  /** GET /api/bookings/availability — informational, no customer or reservation data. */
+  async function getAvailability(request: Request): Promise<Response> {
+    const route = "bookings.availability";
+    const cfg = config(route, request);
+    if (cfg instanceof Response) return cfg;
+    const ip = clientIdentity(request.headers, cfg.clientIpSource);
+    const rateLimited = await limited(route, request, cfg, [["availabilityIp1m", ip.value]]);
+    if (rateLimited) return rateLimited;
+    try {
+      const availability = await deps.getAvailability();
+      return publicJson(200, { availability });
+    } catch (error) {
+      return unexpected(route, request, error);
+    }
+  }
+
+  /** POST /api/bookings/release — cancel only a provably unpaid cookie booking. */
+  async function releaseBooking(request: Request): Promise<Response> {
+    const route = "bookings.release";
+    const pre = await mutationPreamble(route, request, MAX_CHECKOUT_BODY_BYTES);
+    if (pre instanceof Response) return pre;
+    const { cfg, text } = pre;
+    const body = parseJsonObject(text);
+    if (!body.ok || Object.keys(body.value).length > 0) return fail(route, request, "INVALID_REQUEST");
+    const cookie = readBookingCookie(request.headers);
+    const ip = clientIdentity(request.headers, cfg.clientIpSource);
+    const checks: [RateLimitName, string][] = [["releaseIp10m", ip.value]];
+    if (cookie.kind === "present") checks.push(["releaseCredential10m", cookie.token]);
+    const rateLimited = await limited(route, request, cfg, checks);
+    if (rateLimited) return rateLimited;
+    if (cookie.kind !== "present") return fail(route, request, "BOOKING_ACCESS_DENIED", cookie.kind.toUpperCase(), { setCookie: cookie.kind === "ambiguous" ? clearedBookingCookie() : undefined });
+    try {
+      const result = await deps.releaseBooking(cookie.token);
+      return publicJson(200, { released: result.released }, { setCookie: clearedBookingCookie() });
+    } catch (error) {
+      if (error instanceof PublicBookingReleaseConflictError) return fail(route, request, "BOOKING_RELEASE_UNSAFE");
+      if (isBookingAccessError(error)) return fail(route, request, "BOOKING_ACCESS_DENIED", error.reason, { setCookie: clearedBookingCookie() });
+      return unexpected(route, request, error);
+    }
+  }
+
+  return { createBooking, startCheckout, getStatus, getAvailability, releaseBooking };
 }
 
 /** Vercel's request id, when well-formed; for log correlation only. */

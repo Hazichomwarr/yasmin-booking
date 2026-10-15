@@ -1,4 +1,6 @@
-import Stripe from "stripe";
+import type Stripe from "stripe";
+
+import { stripeClient } from "./client";
 
 export type CreateDepositCheckoutInput = {
   paymentId: string;
@@ -38,7 +40,7 @@ type StripeCheckoutClient = Pick<Stripe, "checkout">;
 
 export function stripeCheckoutAdapter(): StripeCheckoutAdapter {
   const { secretKey, baseUrl } = configuration();
-  return createStripeCheckoutAdapter(new Stripe(secretKey), baseUrl);
+  return createStripeCheckoutAdapter(stripeClient(secretKey), baseUrl);
 }
 
 /** Exported for deterministic adapter tests; application code uses the factory above. */
@@ -75,8 +77,8 @@ export function createStripeCheckoutAdapter(
         {
           mode: "payment",
           payment_method_types: ["card"],
-          success_url: `${normalizedBaseUrl}/book/success?appointment_id=${encodeURIComponent(input.appointmentId)}`,
-          cancel_url: `${normalizedBaseUrl}/book/cancel?appointment_id=${encodeURIComponent(input.appointmentId)}`,
+          success_url: `${normalizedBaseUrl}/book/status?return=success`,
+          cancel_url: `${normalizedBaseUrl}/book/status?return=cancel`,
           expires_at: Math.floor(input.expiresAt.getTime() / 1000),
           metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId },
           payment_intent_data: { metadata: { paymentId: input.paymentId, appointmentId: input.appointmentId } },

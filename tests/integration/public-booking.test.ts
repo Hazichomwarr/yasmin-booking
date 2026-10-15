@@ -7,12 +7,12 @@ import { BookingError } from "@/lib/booking/errors";
 import { createPublicBooking, PublicBookingValidationError } from "@/lib/booking/public-booking";
 import { prisma } from "@/lib/prisma";
 
-import { WEEK, createLocation } from "../support/booking-fixtures";
+import { WEEK, createLocation, publicBookingPlace, upcomingPublicBookingDate } from "../support/booking-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
 async function input(capacity = 10) {
-  const { location, slot } = await createLocation({ slots: [{ time: "11:00", capacity }] });
-  return { name: "Yasmin Customer", email: "CUSTOMER@example.test", phone: "+1 (555) 010-0100", locationId: location.id, bookingSlotId: slot.id, appointmentDate: WEEK.tuesday };
+  const { location, slot } = await publicBookingPlace({ capacity });
+  return { name: "Yasmin Customer", email: "CUSTOMER@example.test", phone: "+1 (555) 010-0100", locationId: location.id, bookingSlotId: slot.id, appointmentDate: upcomingPublicBookingDate() };
 }
 async function fault(sql: string, fn: () => Promise<void>) {
   await prisma.$executeRawUnsafe("CREATE OR REPLACE FUNCTION public_booking_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'public booking fault'; END; $$");
@@ -53,6 +53,11 @@ describe("public booking creation", { skip: integrationSkip }, () => {
     await fault('CREATE TRIGGER public_booking_fault_trigger BEFORE INSERT ON "AppointmentEvent" FOR EACH ROW EXECUTE FUNCTION public_booking_fault()', async () => assert.rejects(createPublicBooking(await input()), /public booking fault/));
     assert.equal(await prisma.customer.count(), 0); assert.equal(await prisma.appointment.count(), 0); assert.equal(await prisma.appointmentEvent.count(), 0);
   });
+  it("stores a US-formatted phone exactly as typed (trimmed only)", async () => {
+    const result = await createPublicBooking({ ...(await input()), phone: "  (555) 010-0100 " });
+    const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: result.booking.appointmentId }, include: { customer: true } });
+    assert.equal(appointment.customer.phone, "(555) 010-0100");
+  });
   it("rejects invalid and forbidden input before writes", async () => {
     const base = await input(); for (const value of [{ ...base, email: "bad" }, { ...base, phone: "x" }, { ...base, appointmentDate: "2027-02-30" }, { ...base, name: "x".repeat(121) }, { ...base, emailMarketingConsent: "yes" }, { ...base, customerId: "forbidden" }]) await assert.rejects(createPublicBooking(value), PublicBookingValidationError);
     assert.equal(await prisma.customer.count(), 0); assert.equal(await prisma.appointment.count(), 0);
@@ -71,12 +76,13 @@ describe("public booking creation", { skip: integrationSkip }, () => {
     }
   });
   it("enforces active location, active slot, matching location, weekday, and timezone policy", async () => {
-    const inactiveLocation = await createLocation({ isActive: false });
+    const inactiveLocation = await createLocation({ isActive: false, acceptsOnlineBooking: false });
     await assert.rejects(createPublicBooking({ ...(await input()), locationId: inactiveLocation.location.id, bookingSlotId: inactiveLocation.slot.id }), BookingError);
-    const inactiveSlot = await createLocation({ slots: [{ time: "11:00", isActive: false }] });
-    await assert.rejects(createPublicBooking({ ...(await input()), locationId: inactiveSlot.location.id, bookingSlotId: inactiveSlot.slot.id }), BookingError);
-    const a = await createLocation(); const b = await createLocation();
-    await assert.rejects(createPublicBooking({ ...(await input()), locationId: a.location.id, bookingSlotId: b.slot.id }), BookingError);
+    const online = await input();
+    const inactiveSlot = await prisma.bookingSlot.create({ data: { locationId: online.locationId, localStartTime: new Date("1970-01-01T16:00:00.000Z"), capacity: 10, isActive: false } });
+    await assert.rejects(createPublicBooking({ ...online, bookingSlotId: inactiveSlot.id }), (e: unknown) => e instanceof BookingError && e.code === "SLOT_NOT_BOOKABLE");
+    const other = await createLocation({ acceptsOnlineBooking: false });
+    await assert.rejects(createPublicBooking({ ...online, bookingSlotId: other.slot.id }), (e: unknown) => e instanceof BookingError && e.code === "SLOT_NOT_FOUND");
     await assert.rejects(createPublicBooking({ ...(await input()), appointmentDate: WEEK.saturday }), BookingError);
     await assert.rejects(createPublicBooking({ ...(await input()), appointmentDate: WEEK.sunday }), BookingError);
   });

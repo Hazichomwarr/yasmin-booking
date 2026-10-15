@@ -76,11 +76,11 @@ describe("Stripe Checkout adapter", () => {
     assert.deepEqual(params.payment_intent_data?.metadata, params.metadata);
     assert.equal(
       params.success_url,
-      "https://booking.example.test/book/success?appointment_id=appointment_test_456",
+      "https://booking.example.test/book/status?return=success",
     );
     assert.equal(
       params.cancel_url,
-      "https://booking.example.test/book/cancel?appointment_id=appointment_test_456",
+      "https://booking.example.test/book/status?return=cancel",
     );
     assert.equal("customer_email" in params, false);
   });
