@@ -111,11 +111,17 @@ model Customer {
   name               String
   email              String
   phone              String
+  /// When the customer's CURRENT email-marketing consent was granted; null =
+  /// not consented. Evidence for the grant (and every withdrawal) lives in
+  /// MarketingConsentEvent; a timestamp without a matching GRANTED event
+  /// predates evidence capture and its evidence is unknown.
   emailMarketingAt   DateTime?
+  /// As emailMarketingAt, for SMS marketing.
   smsMarketingAt     DateTime?
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
   appointments       Appointment[]
+  marketingConsentEvents MarketingConsentEvent[]
 
   @@index([email])
   @@index([phone])
@@ -342,4 +348,58 @@ model AdminUser {
   email     String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum MarketingChannel {
+  EMAIL
+  SMS
+}
+
+enum MarketingConsentAction {
+  GRANTED
+  WITHDRAWN
+}
+
+enum MarketingConsentSource {
+  /// The customer ticked the channel's (unticked-by-default) box on the public booking form.
+  PUBLIC_BOOKING_FORM
+  /// A staff member recorded the customer's request (withdrawals only); actorId says who.
+  INTERNAL_OPERATOR
+}
+
+// Append-only evidence of marketing consent, one row per grant or withdrawal
+// per channel. A database trigger (migration
+// 20261014140000_public_booking_api_foundation) rejects UPDATE and DELETE.
+// No rows were backfilled: consent recorded before this table existed has
+// unknown evidence and is never represented as proven.
+model MarketingConsentEvent {
+  id             String                 @id @default(cuid())
+  customerId     String
+  channel        MarketingChannel
+  action         MarketingConsentAction
+  occurredAt     DateTime
+  /// Identifier of the exact consent wording shown (GRANTED only).
+  wordingVersion String?
+  source         MarketingConsentSource
+  /// Who recorded it, for INTERNAL_OPERATOR rows. Not a foreign key: history outlives accounts.
+  actorId        String?
+  createdAt      DateTime               @default(now())
+  customer       Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, channel, occurredAt])
+}
+
+// Shared fixed-window rate-limit counters for the public booking API.
+// Ephemeral, not history: keyHash is an HMAC-SHA256 of the identity (IP,
+// email, phone, credential) under RATE_LIMIT_SECRET, so no raw identifier is
+// stored. Rows are deleted once expired.
+model RateLimitCounter {
+  scope       String
+  keyHash     String
+  windowStart DateTime
+  count       Int
+  expiresAt   DateTime
+
+  @@id([scope, keyHash, windowStart])
+  @@index([expiresAt])
 }

@@ -24,7 +24,15 @@ export type BookingErrorCode =
   /** Only CONFIRMED appointments can be rescheduled in V1. */
   | "APPOINTMENT_NOT_RESCHEDULABLE"
   /** Booking details can only be edited while PENDING_PAYMENT or CONFIRMED. */
-  | "APPOINTMENT_NOT_EDITABLE";
+  | "APPOINTMENT_NOT_EDITABLE"
+  /** Checkout: the booking is cancelled, closed, or otherwise not awaiting payment. */
+  | "BOOKING_NOT_PAYABLE"
+  /** Checkout: the booking is already confirmed by a verified payment. */
+  | "BOOKING_ALREADY_CONFIRMED"
+  /** Checkout: the original hold has expired. */
+  | "HOLD_EXPIRED"
+  /** Checkout: the hold is still active but too little of it remains to start Checkout. */
+  | "HOLD_TIME_INSUFFICIENT";
 
 export class BookingError extends Error {
   readonly code: BookingErrorCode;

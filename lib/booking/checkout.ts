@@ -12,15 +12,54 @@ import { countConsumedCapacity, lockBookingSlotCapacity, remainingCapacity } fro
 import { BookingError } from "./errors";
 import { salonDateFromDatabase } from "./salon-calendar";
 
-const MIN_ORIGINAL_HOLD_MS = 60_000;
+/** Least original hold time that must remain to start Checkout. */
+export const MIN_ORIGINAL_HOLD_MS = 60_000;
 const CHECKOUT_WINDOW_MS = 34 * 60_000;
 const HOLD_GRACE_MS = 5 * 60_000;
 const MIN_PROVIDER_CREATE_WINDOW_MS = 31 * 60_000;
 
 export type CheckoutStartResult =
   | { kind: "ready"; paymentId: string; checkoutUrl: string; expiresAt: Date }
-  | { kind: "ambiguous"; paymentId: string }
+  | { kind: "ambiguous"; paymentId: string; reason: CheckoutAmbiguityReason; retryable: boolean }
   | { kind: "retry-window-expired"; paymentId: string };
+
+/**
+ * Why no Checkout URL could be returned safely. The one-Payment rule holds in
+ * every case: a retry can only ever return the recorded Session, never create
+ * another, and nothing here asks Stripe to create one again.
+ *
+ * Each reason is derived from the persisted Payment (plus, for a recorded
+ * Session, Stripe's view of it), never from elapsed time, so repeated requests
+ * for the same unresolved Payment get the same answer. Only a failed read of
+ * an already recorded Session is `retryable`.
+ */
+export type CheckoutAmbiguityReason =
+  /** Stripe could not be reached to re-read the recorded Session. Temporary: retrying is safe and may succeed. */
+  | "provider-retrieval-failed"
+  /**
+   * The Payment has no recorded Session: creation failed, timed out, returned
+   * mismatching facts, was not persisted, or is still in flight in another
+   * request. A Session may exist at Stripe; its outcome is unknown. Permanent
+   * for this booking until payment evidence resolves the Payment.
+   */
+  | "checkout-creation-unconfirmed"
+  /** The recorded Session is expired, past its expiry, of unknown state, or inconsistent with the Payment. */
+  | "provider-session-unusable"
+  /** Stripe reports the recorded Session complete; verified fulfillment has not been applied yet. */
+  | "payment-awaiting-confirmation"
+  /** Money was already received for this Payment (PAID or REFUNDED) while the booking still awaits payment. */
+  | "payment-already-received"
+  /** The attempt ended with no money and no payable Session (EXPIRED/FAILED, from verified Stripe evidence). */
+  | "checkout-attempt-ended"
+  /** The booking or payment changed (cancelled, revoked, fulfilled) while Checkout was being prepared. */
+  | "booking-changed";
+
+const ambiguous = (paymentId: string, reason: CheckoutAmbiguityReason): CheckoutStartResult => ({
+  kind: "ambiguous",
+  paymentId,
+  reason,
+  retryable: reason === "provider-retrieval-failed",
+});
 
 export interface CheckoutClock {
   now(tx?: Prisma.TransactionClient): Promise<Date>;
@@ -49,9 +88,11 @@ export async function startBookingDepositCheckout(
   const prepared = await prepareCheckout(appointmentId, clock, grant);
   if (prepared.kind === "existing") {
     let session;
-    try { session = await adapter.retrieveDepositCheckout(prepared.checkoutSessionId); } catch { return { kind: "ambiguous", paymentId: prepared.paymentId }; }
-    if (!sessionMatchesPayment(session, prepared) || session.status !== "open" || session.expiresAt.getTime() <= (await clock.now()).getTime()) return { kind: "ambiguous", paymentId: prepared.paymentId };
-    if (!await canReturnExistingSession(prepared, session.id, clock, grant)) return { kind: "ambiguous", paymentId: prepared.paymentId };
+    try { session = await adapter.retrieveDepositCheckout(prepared.checkoutSessionId); } catch { return ambiguous(prepared.paymentId, "provider-retrieval-failed"); }
+    if (!sessionMatchesPayment(session, prepared)) return ambiguous(prepared.paymentId, "provider-session-unusable");
+    if (session.status === "complete") return ambiguous(prepared.paymentId, "payment-awaiting-confirmation");
+    if (session.status !== "open" || session.expiresAt.getTime() <= (await clock.now()).getTime()) return ambiguous(prepared.paymentId, "provider-session-unusable");
+    if (!await canReturnExistingSession(prepared, session.id, clock, grant)) return ambiguous(prepared.paymentId, "booking-changed");
     return { kind: "ready", paymentId: prepared.paymentId, checkoutUrl: session.url, expiresAt: session.expiresAt };
   }
   if (prepared.kind !== "prepared") return prepared;
@@ -66,11 +107,12 @@ export async function startBookingDepositCheckout(
   } catch {
     // The provider may have accepted the idempotent request. Do not create a
     // different attempt or shorten the hold without proof that no session exists.
-    return { kind: "ambiguous", paymentId: prepared.checkout.paymentId };
+    return ambiguous(prepared.checkout.paymentId, "checkout-creation-unconfirmed");
   }
 
   if (!sessionMatchesPayment(session, prepared.checkout)) {
-    return { kind: "ambiguous", paymentId: prepared.checkout.paymentId };
+    // Nothing is persisted, so later requests see the same unrecorded Payment.
+    return ambiguous(prepared.checkout.paymentId, "checkout-creation-unconfirmed");
   }
   await adapter.afterCreateBeforePersistence?.(session, prepared.checkout);
 
@@ -91,10 +133,10 @@ export async function startBookingDepositCheckout(
   } catch {
     // Stripe may have created the Session, but its identity was not durably
     // recorded. A retry must not create a second chargeable Session.
-    return { kind: "ambiguous", paymentId: prepared.checkout.paymentId };
+    return ambiguous(prepared.checkout.paymentId, "checkout-creation-unconfirmed");
   }
 
-  if (!persisted) return { kind: "ambiguous", paymentId: prepared.checkout.paymentId };
+  if (!persisted) return ambiguous(prepared.checkout.paymentId, "booking-changed");
   return { kind: "ready", paymentId: prepared.checkout.paymentId, checkoutUrl: session.url, expiresAt: session.expiresAt };
 }
 
@@ -155,7 +197,8 @@ async function prepareCheckout(appointmentId: string, clock: CheckoutClock, gran
   return prisma.$transaction(async (tx) => {
     const appointment = await lockAppointment(tx, appointmentId);
     if (grant) await assertBookingAccessUnderLock(tx, grant);
-    if (appointment.status !== "PENDING_PAYMENT" || !appointment.holdExpiresAt) throw new BookingError("APPOINTMENT_NOT_EDITABLE", "Appointment is not eligible to start checkout.");
+    if (appointment.status === "CONFIRMED") throw new BookingError("BOOKING_ALREADY_CONFIRMED", "Appointment is not eligible to start checkout: it is already confirmed.");
+    if (appointment.status !== "PENDING_PAYMENT" || !appointment.holdExpiresAt) throw new BookingError("BOOKING_NOT_PAYABLE", "Appointment is not eligible to start checkout.");
     const location = await tx.salonLocation.findUniqueOrThrow({ where: { id: appointment.locationId }, select: { id: true, name: true, timeZone: true, isActive: true, acceptsOnlineBooking: true } });
     await tx.$queryRaw<{ id: string }[]>`
       SELECT "id" FROM "Payment"
@@ -163,8 +206,10 @@ async function prepareCheckout(appointmentId: string, clock: CheckoutClock, gran
       FOR UPDATE
     `;
     const existing = await tx.payment.findUnique({ where: { appointmentId_purpose: { appointmentId: appointment.id, purpose: "BOOKING_DEPOSIT" } } });
+    if (existing && (existing.status === "EXPIRED" || existing.status === "FAILED")) return ambiguous(existing.id, "checkout-attempt-ended");
+    if (existing && (existing.status === "PAID" || existing.status === "REFUNDED")) return ambiguous(existing.id, "payment-already-received");
     if (existing?.providerCheckoutSessionId && existing.providerCheckoutExpiresAt) return { kind: "existing", paymentId: existing.id, appointmentId: appointment.id, checkoutSessionId: existing.providerCheckoutSessionId, amountCents: existing.amountCents, expiresAt: existing.providerCheckoutExpiresAt };
-    if (existing) return { kind: "ambiguous", paymentId: existing.id };
+    if (existing) return ambiguous(existing.id, "checkout-creation-unconfirmed");
     const slotExists = await lockBookingSlotCapacity(tx, appointment.bookingSlotId);
     const slot = slotExists ? await tx.bookingSlot.findUnique({ where: { id: appointment.bookingSlotId }, select: { id: true, locationId: true, localStartTime: true, capacity: true, isActive: true } }) : null;
     if (!slot || slot.locationId !== location.id) throw new BookingError("SLOT_NOT_FOUND", "Appointment slot is no longer valid.");
@@ -173,7 +218,9 @@ async function prepareCheckout(appointmentId: string, clock: CheckoutClock, gran
     const date = salonDateFromDatabase(appointment.appointmentDate);
     const dateReason = dateClosedReason(date, location, now);
     if (dateReason) throw new BookingError(dateReason, "Appointment date is no longer bookable.");
-    if (appointment.holdExpiresAt.getTime() - now.getTime() < MIN_ORIGINAL_HOLD_MS) throw new BookingError("CAPACITY_FULL", "Not enough original hold time remains to start checkout.");
+    const holdRemainingMs = appointment.holdExpiresAt.getTime() - now.getTime();
+    if (holdRemainingMs <= 0) throw new BookingError("HOLD_EXPIRED", "The original hold has expired.");
+    if (holdRemainingMs < MIN_ORIGINAL_HOLD_MS) throw new BookingError("HOLD_TIME_INSUFFICIENT", "Not enough original hold time remains to start checkout.");
     const consumed = await countConsumedCapacity(tx, { bookingSlotId: slot.id, appointmentDate: date }, now, { excludingAppointmentId: appointment.id });
     if (remainingCapacity(slot.capacity, consumed) === 0) throw new BookingError("CAPACITY_FULL", "The appointment slot is no longer available.");
     const expiresAt = new Date(Math.floor(now.getTime() / 1000) * 1000 + CHECKOUT_WINDOW_MS);
