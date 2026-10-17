@@ -379,8 +379,11 @@
 .details { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; margin: 0; }
 .details dt { color: #766b6e; font-size: 0.85rem; }
 .details dd { margin: 0 0 12px; font-weight: 700; overflow-wrap: break-word; }
-.history { margin: 0; padding-left: 18px; }
-.history li { margin-bottom: 6px; }
+.history { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.historyItem { position: relative; display: grid; gap: 5px; padding: 0 0 14px 18px; border-bottom: 1px solid #eedfd8; overflow-wrap: anywhere; }
+.historyItem::before { position: absolute; top: 0.42rem; left: 0; width: 8px; height: 8px; border-radius: 50%; background: #c52f60; content: ""; }
+.historyItem:last-child { padding-bottom: 0; border-bottom: 0; }
+.historyDetails { display: grid; gap: 3px; color: #766b6e; font-size: 0.84rem; line-height: 1.45; }
 
 .login { width: min(calc(100% - 40px), 420px); margin: 10vh auto 0; }
 .login label { display: grid; gap: 6px; margin-bottom: 14px; font-weight: 700; }

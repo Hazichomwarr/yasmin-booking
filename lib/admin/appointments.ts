@@ -1,7 +1,9 @@
-import type { AppointmentEventType, AppointmentStatus, Prisma } from "@prisma/client";
+import type { AppointmentStatus, Prisma } from "@prisma/client";
 
 import { capacityConsumingAppointments } from "@/lib/booking/capacity";
 import { formatSalonAddress, salonAddressSelect } from "@/lib/booking/location-address";
+import { hasStarted } from "@/lib/admin/appointment-actions";
+import { toAdminHistoryItem, type AdminHistoryItem } from "@/lib/admin/appointment-history";
 import { addSalonDays, parseSalonDate, salonDateFromDatabase, salonDateToDatabase, salonToday, type SalonDate } from "@/lib/booking/salon-calendar";
 import { prisma } from "@/lib/prisma";
 
@@ -229,8 +231,9 @@ export type AdminAppointmentDetail = AdminAppointmentSummary & {
   holdExpiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
-  /** Audit trail: event types and times only (details may hold internal identifiers). */
-  history: Array<{ type: AppointmentEventType; at: Date }>;
+  /** Append-only audit facts, intentionally excluding operation ids and payment credentials. */
+  history: AdminHistoryItem[];
+  hasStarted: boolean;
 };
 
 export async function getAdminAppointmentDetail(access: AdminAccess, appointmentId: string): Promise<AdminAppointmentDetail | null> {
@@ -246,7 +249,7 @@ export async function getAdminAppointmentDetail(access: AdminAccess, appointment
       updatedAt: true,
       customer: { select: { name: true, email: true, phone: true } },
       location: { select: { name: true, timeZone: true, ...salonAddressSelect } },
-      events: { select: { type: true, createdAt: true }, orderBy: { createdAt: "asc" } },
+      events: { select: { type: true, createdAt: true, reason: true, details: true, actor: { select: { email: true } } }, orderBy: { createdAt: "asc" } },
     },
   });
   if (!row) return null;
@@ -263,6 +266,7 @@ export async function getAdminAppointmentDetail(access: AdminAccess, appointment
     holdExpiresAt: row.holdExpiresAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    history: row.events.map((event) => ({ type: event.type, at: event.createdAt })),
+    history: row.events.map((event) => toAdminHistoryItem({ type: event.type, at: event.createdAt, reason: event.reason, details: event.details, actorEmail: event.actor?.email ?? null })),
+    hasStarted: row.status === "CONFIRMED" && hasStarted({ appointmentDate: salonDateFromDatabase(row.appointmentDate), slotTime: row.slotTimeSnapshot, timeZone: row.location.timeZone }, now),
   };
 }

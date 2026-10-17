@@ -63,12 +63,23 @@ export default async function AdminAppointmentDetailPage({ params }: PageProps<"
         updatedAt: detail.updatedAt.toISOString(),
         depositReceived: detail.payment.depositPaid,
         hasOpenCheckout: detail.payment.depositState === "checkout-started",
+        canCompleteOrMarkNoShow: detail.hasStarted,
       }} />
-      <section className={styles.panel} aria-label="History">
-        <h2>History</h2>
+      <section className={styles.panel} aria-label="Appointment history">
+        <h2>Appointment history</h2>
         {detail.history.length === 0 ? <p className={styles.empty}>No recorded events.</p> : (
           <ol className={styles.history}>
-            {detail.history.map((event, index) => <li key={index}>{event.type.replaceAll("_", " ").toLowerCase()} <span className={styles.muted}>· {instantLabel(event.at, zone)}</span></li>)}
+            {detail.history.map((item, index) => {
+              return <li key={index} className={styles.historyItem}>
+                <strong>{item.label}</strong><span className={styles.muted}> · {instantLabel(item.at, zone)}</span>
+                <div className={styles.historyDetails}>
+                  <span>{item.actorEmail ? `Admin: ${item.actorEmail}` : "Automated booking or payment event"}</span>
+                  {item.reason && <span>Note: {item.reason}</span>}
+                  {item.transition && <span>Status: {item.transition}</span>}
+                  {item.schedule && <span>Schedule: {item.schedule}</span>}
+                </div>
+              </li>;
+            })}
           </ol>
         )}
       </section>

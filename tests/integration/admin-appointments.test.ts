@@ -77,6 +77,21 @@ describe("admin appointment reads", { skip: integrationSkip }, () => {
     assert.deepEqual([(await listAdminAppointments(access, parseAdminAppointmentFilters({}))).total], [0]);
   });
 
+  it("returns chronological, attributed history while retaining older unattributed events", async () => {
+    const access = await adminAccess();
+    const [slot] = await place();
+    const today = salonToday(ADMIN_TIME_ZONE, await databaseNow());
+    const booked = await appointment(slot, today, "CONFIRMED");
+    await prisma.appointmentEvent.create({ data: { appointmentId: booked.id, type: "CREATED", details: { schemaVersion: 1 } } });
+    await prisma.appointmentEvent.create({ data: { appointmentId: booked.id, type: "COMPLETED", details: { schemaVersion: 1, fromStatus: "CONFIRMED", toStatus: "COMPLETED" }, actorAdminUserId: access.adminUserId, operationId: "11111111-1111-4111-8111-111111111111", reason: "Service performed" } });
+    const detail = await getAdminAppointmentDetail(access, booked.id);
+    assert.ok(detail);
+    assert.deepEqual(detail.history.map((event) => event.type), ["CREATED", "COMPLETED"]);
+    assert.equal(detail.history[0].actorEmail, null);
+    assert.equal(detail.history[1].actorEmail, "owner@example.test");
+    assert.equal(detail.history[1].reason, "Service performed");
+  });
+
   it("builds dashboard sections from existing statuses and the capacity rule", async () => {
     const access = await adminAccess();
     const [s0500, s1100, s1400] = await place();

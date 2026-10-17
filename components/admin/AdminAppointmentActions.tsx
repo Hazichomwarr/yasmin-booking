@@ -16,6 +16,7 @@ type Props = {
     updatedAt: string;
     depositReceived: boolean;
     hasOpenCheckout: boolean;
+    canCompleteOrMarkNoShow: boolean;
   };
 };
 
@@ -27,7 +28,7 @@ const labelFor = (status: Props["appointment"]["status"]) => status.replaceAll("
 /** Interactive layer only; the authenticated action service remains policy authority. */
 export function AdminAppointmentActions({ appointment }: Props) {
   const router = useRouter();
-  const [mode, setMode] = useState<"cancel" | "reschedule" | null>(null);
+  const [mode, setMode] = useState<"cancel" | "reschedule" | "complete" | "markNoShow" | null>(null);
   const [reason, setReason] = useState("");
   const [date, setDate] = useState(appointment.appointmentDate);
   const [slotId, setSlotId] = useState("");
@@ -38,6 +39,7 @@ export function AdminAppointmentActions({ appointment }: Props) {
 
   const canCancel = appointment.status === "CONFIRMED" || appointment.status === "PENDING_PAYMENT";
   const canReschedule = appointment.status === "CONFIRMED";
+  const canCompleteOrMarkNoShow = appointment.status === "CONFIRMED" && appointment.canCompleteOrMarkNoShow;
 
   useEffect(() => {
     function dismissOnEscape(event: KeyboardEvent) {
@@ -109,7 +111,13 @@ export function AdminAppointmentActions({ appointment }: Props) {
     void loadSlots(appointment.appointmentDate);
   }
 
-  if (!canCancel && !canReschedule) {
+  function startLifecycleAction(nextMode: "complete" | "markNoShow") {
+    setMessage(null);
+    setReason("");
+    setMode(nextMode);
+  }
+
+  if (!canCancel && !canReschedule && !canCompleteOrMarkNoShow) {
     return <section className={styles.panel} aria-label="Manage appointment"><h2>Manage appointment</h2><p className={styles.empty}>This appointment is {labelFor(appointment.status)}. No further appointment actions are available.</p></section>;
   }
 
@@ -120,6 +128,8 @@ export function AdminAppointmentActions({ appointment }: Props) {
       <p className={styles.muted}>Administrative changes are recorded in the appointment history.</p>
       <div className={styles.actionRow}>
         {canReschedule && <button className={styles.secondary} type="button" onClick={startReschedule}>Reschedule</button>}
+        {canCompleteOrMarkNoShow && <button className={styles.primary} type="button" onClick={() => startLifecycleAction("complete")}>Mark completed</button>}
+        {canCompleteOrMarkNoShow && <button className={styles.secondary} type="button" onClick={() => startLifecycleAction("markNoShow")}>Mark no-show</button>}
         {canCancel && <button className={styles.danger} type="button" onClick={startCancel}>Cancel appointment</button>}
       </div>
       {message && <p className={styles.actionMessage} role="status">{message}</p>}
@@ -127,7 +137,7 @@ export function AdminAppointmentActions({ appointment }: Props) {
 
       {mode && <div className={styles.dialogBackdrop} role="presentation">
         <section className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="appointment-action-title">
-          <div className={styles.dialogHeading}><div><p className={styles.eyebrow}>{mode === "cancel" ? "Cancellation" : "Reschedule"}</p><h2 id="appointment-action-title">{mode === "cancel" ? "Cancel this appointment?" : "Choose a new time"}</h2></div><button className={styles.close} type="button" onClick={() => !busy && setMode(null)} aria-label="Close">×</button></div>
+          <div className={styles.dialogHeading}><div><p className={styles.eyebrow}>{mode === "cancel" ? "Cancellation" : mode === "reschedule" ? "Reschedule" : mode === "complete" ? "Completion" : "No-show"}</p><h2 id="appointment-action-title">{mode === "cancel" ? "Cancel this appointment?" : mode === "reschedule" ? "Choose a new time" : mode === "complete" ? "Mark this service completed?" : "Mark this customer as absent?"}</h2></div><button className={styles.close} type="button" onClick={() => !busy && setMode(null)} aria-label="Close">×</button></div>
           <dl className={styles.actionFacts}>
             <dt>Customer</dt><dd>{appointment.customerName}</dd><dt>Service</dt><dd>{appointment.hairstyleName ?? "No preference"}</dd><dt>Current schedule</dt><dd>{appointment.appointmentDate} at {appointment.slotTime}</dd><dt>Status</dt><dd>{labelFor(appointment.status)}</dd>
             {appointment.depositReceived && <><dt>Deposit</dt><dd>Received</dd></>}
@@ -136,13 +146,17 @@ export function AdminAppointmentActions({ appointment }: Props) {
             <p className={styles.notice}>Cancellation does not automatically refund a deposit.{appointment.hasOpenCheckout ? " A Checkout payment may still arrive and will require reconciliation." : ""}</p>
             <label className={styles.actionLabel}>Cancellation reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} required minLength={1} maxLength={500} /></label>
             <div className={styles.dialogActions}><button className={styles.secondary} type="button" onClick={() => setMode(null)} disabled={busy}>Keep appointment</button><button className={styles.danger} type="button" disabled={busy || !reason.trim()} onClick={() => void submit({ action: { kind: "cancel" }, operationId: pending?.body.operationId ?? operationId(), expectedUpdatedAt: appointment.updatedAt, reason: reason.trim() }, "Cancellation")}>{busy ? "Cancelling…" : "Confirm cancellation"}</button></div>
-          </> : <>
+          </> : mode === "reschedule" ? <>
             <p className={styles.notice}>The existing deposit carries over. No new deposit is charged.</p>
             <label className={styles.actionLabel}>New date<input type="date" value={date} onChange={(event) => void loadSlots(event.target.value)} /></label>
             {availability?.closedReason ? <p className={styles.error}>This date is not available for online bookings.</p> : <fieldset className={styles.slotChoices}><legend>Available times</legend>{availability ? availability.slots.length ? availability.slots.map((slot) => <label key={slot.bookingSlotId}><input type="radio" name="slot" value={slot.bookingSlotId} checked={slotId === slot.bookingSlotId} onChange={() => setSlotId(slot.bookingSlotId)} /> {slot.startTime} <span>{slot.remainingCapacity} remaining</span></label>) : <p className={styles.empty}>No future available times on this date.</p> : <p className={styles.empty}>Loading times…</p>}</fieldset>}
             <label className={styles.actionLabel}>Rescheduling reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} required minLength={1} maxLength={500} /></label>
             {slotId && <p className={styles.notice}>Proposed schedule: {date} at {availability?.slots.find((slot) => slot.bookingSlotId === slotId)?.startTime}.</p>}
             <div className={styles.dialogActions}><button className={styles.secondary} type="button" onClick={() => setMode(null)} disabled={busy}>Keep schedule</button><button className={styles.primary} type="button" disabled={busy || !slotId || !reason.trim() || !availability} onClick={() => availability && void submit({ action: { kind: "reschedule", appointmentDate: date, bookingSlotId: slotId, locationId: availability.locationId }, operationId: pending?.body.operationId ?? operationId(), expectedUpdatedAt: appointment.updatedAt, reason: reason.trim() }, "Reschedule")}>{busy ? "Saving…" : "Confirm reschedule"}</button></div>
+          </> : <>
+            <p className={styles.notice}>{mode === "complete" ? "I confirm this service was performed. This does not collect the remaining balance." : "This records the customer as absent. It does not refund the deposit or alter payment records."}</p>
+            <label className={styles.actionLabel}>Optional reason or note<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} /></label>
+            <div className={styles.dialogActions}><button className={styles.secondary} type="button" onClick={() => setMode(null)} disabled={busy}>Keep appointment</button><button className={mode === "complete" ? styles.primary : styles.danger} type="button" disabled={busy} onClick={() => void submit({ action: { kind: mode }, operationId: pending?.body.operationId ?? operationId(), expectedUpdatedAt: appointment.updatedAt, ...(reason.trim() ? { reason: reason.trim() } : {}) }, mode === "complete" ? "Completion" : "No-show")}>{busy ? "Saving…" : mode === "complete" ? "Confirm service performed" : "Confirm no-show"}</button></div>
           </>}
         </section>
       </div>}
