@@ -60,6 +60,18 @@ export function normalizeOptionalText(
   return text.length === 0 ? null : text;
 }
 
+/** Prices are integer USD cents. Null is a deliberate draft/unpriced state. */
+export function normalizeOptionalPriceCents(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 4_000) {
+    throw new CatalogError(
+      "INVALID_PRICE",
+      "A bookable catalog price must be an integer of at least the $40 deposit.",
+    );
+  }
+  return value;
+}
+
 /**
  * Validates that `orderedIds` is exactly a permutation of `existingIds`.
  *

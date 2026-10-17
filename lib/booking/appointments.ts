@@ -21,11 +21,14 @@ export type AppointmentView = {
   slotTimeSnapshot: string;
   hairstyleId: string | null;
   hairstyleNameSnapshot: string | null;
+  hairstyleVariantId: string | null;
+  hairstyleVariantNameSnapshot: string | null;
   preferredStylistName: string | null;
   customerNotes: string | null;
   totalPriceCents: number;
   depositAmountCents: number;
   balanceDueCents: number;
+  currency: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -42,11 +45,14 @@ export const appointmentSelect = {
   slotTimeSnapshot: true,
   hairstyleId: true,
   hairstyleNameSnapshot: true,
+  hairstyleVariantId: true,
+  hairstyleVariantNameSnapshot: true,
   preferredStylistName: true,
   customerNotes: true,
   totalPriceCents: true,
   depositAmountCents: true,
   balanceDueCents: true,
+  currency: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.AppointmentSelect;

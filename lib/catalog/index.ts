@@ -44,6 +44,18 @@ export {
 } from "./hairstyles";
 
 export {
+  activateHairstyleVariant,
+  createHairstyleVariant,
+  deactivateHairstyleVariant,
+  listHairstyleVariantsForAdmin,
+  reorderHairstyleVariants,
+  setHairstyleVariantActive,
+  updateHairstyleVariant,
+  type CreateHairstyleVariantInput,
+  type UpdateHairstyleVariantInput,
+} from "./variants";
+
+export {
   MEDIA_LIMITS,
   attachHairstyleImage,
   attachVerifiedHairstyleVideo,
@@ -73,6 +85,7 @@ export type {
   AdminCategory,
   AdminHairstyle,
   AdminHairstyleDetail,
+  AdminHairstyleVariant,
   AdminMedia,
   PublicCategory,
   PublicHairstyle,

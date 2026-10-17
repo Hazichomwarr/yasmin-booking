@@ -6,9 +6,11 @@ import { CatalogError } from "./errors";
 import { isRecordNotFound, isUniqueViolationOn } from "./prisma-errors";
 import {
   adminHairstyleSelect,
+  adminHairstyleVariantSelect,
   adminMediaSelect,
   hairstyleOrder,
   mediaOrder,
+  variantOrder,
   toAdminHairstyle,
   type AdminHairstyle,
   type AdminHairstyleDetail,
@@ -17,6 +19,7 @@ import {
   assertCompleteOrdering,
   normalizeName,
   normalizeOptionalText,
+  normalizeOptionalPriceCents,
   normalizeSlug,
 } from "./validation";
 
@@ -46,6 +49,9 @@ export type CreateHairstyleInput = {
   description?: string | null;
   /** Defaults to true (schema default). */
   isActive?: boolean;
+  /** Null makes a draft/unpriced simple style. */
+  priceCents?: number | null;
+  requiresVariant?: boolean;
 };
 
 export type UpdateHairstyleInput = {
@@ -54,6 +60,8 @@ export type UpdateHairstyleInput = {
   description?: string | null;
   /** Changing the category appends the hairstyle to the destination's end. */
   categoryId?: string;
+  priceCents?: number | null;
+  requiresVariant?: boolean;
 };
 
 export async function listHairstylesForAdmin(
@@ -75,18 +83,24 @@ export async function getHairstyleDetailForAdmin(
     select: {
       ...adminHairstyleSelect,
       media: { select: adminMediaSelect, orderBy: mediaOrder },
+      variants: { select: adminHairstyleVariantSelect, orderBy: variantOrder },
     },
   });
   if (!row) throw hairstyleNotFound(hairstyleId);
 
-  const { media, ...hairstyle } = row;
-  return { ...toAdminHairstyle(hairstyle), media };
+  const { media, variants, ...hairstyle } = row;
+  return { ...toAdminHairstyle(hairstyle), media, variants };
 }
 
 export async function createHairstyle(input: CreateHairstyleInput): Promise<AdminHairstyle> {
   const name = normalizeName(input.name, "Hairstyle name");
   const slug = normalizeSlug(input.slug);
   const description = normalizeOptionalText(input.description) ?? null;
+  const priceCents = normalizeOptionalPriceCents(input.priceCents);
+  const requiresVariant = input.requiresVariant ?? false;
+  if (requiresVariant && priceCents !== null) {
+    throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
+  }
 
   try {
     const row = await prisma.$transaction(async (tx) => {
@@ -99,6 +113,8 @@ export async function createHairstyle(input: CreateHairstyleInput): Promise<Admi
           description,
           sortOrder,
           isActive: input.isActive ?? true,
+          priceCents,
+          requiresVariant,
         },
         select: adminHairstyleSelect,
       });
@@ -118,10 +134,20 @@ export async function updateHairstyle(
     name: input.name === undefined ? undefined : normalizeName(input.name, "Hairstyle name"),
     slug: input.slug === undefined ? undefined : normalizeSlug(input.slug),
     description: normalizeOptionalText(input.description),
+    priceCents: input.priceCents === undefined ? undefined : normalizeOptionalPriceCents(input.priceCents),
+    requiresVariant: input.requiresVariant,
   };
 
   try {
     if (input.categoryId === undefined) {
+      if (data.requiresVariant === true && data.priceCents !== undefined && data.priceCents !== null) {
+        throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
+      }
+      const current = await prisma.hairstyle.findUnique({ where: { id: hairstyleId }, select: { requiresVariant: true, priceCents: true } });
+      if (!current) throw hairstyleNotFound(hairstyleId);
+      if ((data.requiresVariant ?? current.requiresVariant) && (data.priceCents === undefined ? current.priceCents : data.priceCents) !== null) {
+        throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
+      }
       const row = await prisma.hairstyle.update({
         where: { id: hairstyleId },
         data,

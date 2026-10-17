@@ -149,20 +149,42 @@ model HairstyleCategory {
 }
 
 model Hairstyle {
-  id           String            @id @default(cuid())
-  categoryId   String
-  name         String
-  slug         String            @unique
-  description  String?
-  isActive     Boolean           @default(true)
-  sortOrder    Int               @default(0)
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
-  category     HairstyleCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  media        HairstyleMedia[]
-  appointments Appointment[]
+  id              String             @id @default(cuid())
+  categoryId      String
+  name            String
+  slug            String             @unique
+  description     String?
+  /// Null means a draft/unpriced simple style. Prices are integer USD cents.
+  priceCents      Int?
+  /// A variant-based style cannot be booked without an active variant.
+  requiresVariant Boolean            @default(false)
+  isActive        Boolean            @default(true)
+  sortOrder       Int                @default(0)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  category        HairstyleCategory  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  media           HairstyleMedia[]
+  variants        HairstyleVariant[]
+  appointments    Appointment[]
 
   @@index([categoryId, isActive, sortOrder])
+}
+
+model HairstyleVariant {
+  id           String        @id @default(cuid())
+  hairstyleId  String
+  name         String
+  /// Null means a draft variant, never bookable.
+  priceCents   Int?
+  isActive     Boolean       @default(true)
+  sortOrder    Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  hairstyle    Hairstyle     @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  appointments Appointment[]
+
+  @@unique([hairstyleId, name])
+  @@index([hairstyleId, isActive, sortOrder])
 }
 
 model HairstyleMedia {
@@ -182,45 +204,52 @@ model HairstyleMedia {
 }
 
 model Appointment {
-  id                    String                    @id @default(cuid())
-  customerId            String
-  locationId            String
-  bookingSlotId         String
-  hairstyleId           String?
-  appointmentDate       DateTime                  @db.Date
-  status                AppointmentStatus         @default(PENDING_PAYMENT)
-  preferredStylistName  String?
-  customerNotes         String?
-  holdExpiresAt         DateTime?
-  locationNameSnapshot  String
-  slotTimeSnapshot      String
-  hairstyleNameSnapshot String?
-  totalPriceCents       Int
-  depositAmountCents    Int
-  balanceDueCents       Int
+  id                           String                    @id @default(cuid())
+  customerId                   String
+  locationId                   String
+  bookingSlotId                String
+  hairstyleId                  String?
+  hairstyleVariantId           String?
+  appointmentDate              DateTime                  @db.Date
+  status                       AppointmentStatus         @default(PENDING_PAYMENT)
+  preferredStylistName         String?
+  customerNotes                String?
+  holdExpiresAt                DateTime?
+  locationNameSnapshot         String
+  slotTimeSnapshot             String
+  hairstyleNameSnapshot        String?
+  hairstyleVariantNameSnapshot String?
+  totalPriceCents              Int
+  depositAmountCents           Int
+  balanceDueCents              Int
+  /// USD for appointments created after catalog pricing; null preserves the
+  /// genuinely unknown currency of older records.
+  currency                     String?
   /// SHA-256 (lowercase hex) of the customer's anonymous booking-access token.
   /// The token itself is never stored. Never selected into appointment views.
   /// Hash, issuedAt and expiresAt are all set or all null (CHECK constraint in
   /// migration 20261014120000_booking_access_foundation); null = no public access.
-  accessTokenHash       String?                   @unique
-  accessTokenIssuedAt   DateTime?
-  accessTokenExpiresAt  DateTime?
+  accessTokenHash              String?                   @unique
+  accessTokenIssuedAt          DateTime?
+  accessTokenExpiresAt         DateTime?
   /// Set once by revocation; requires a token. Never cleared.
-  accessTokenRevokedAt  DateTime?
-  createdAt             DateTime                  @default(now())
-  updatedAt             DateTime                  @updatedAt
-  customer              Customer                  @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  location              SalonLocation             @relation(fields: [locationId], references: [id], onDelete: Restrict)
-  bookingSlot           BookingSlot               @relation(fields: [bookingSlotId], references: [id], onDelete: Restrict)
-  hairstyle             Hairstyle?                @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
-  payments              Payment[]
-  events                AppointmentEvent[]
-  confirmationEmail     BookingConfirmationEmail?
+  accessTokenRevokedAt         DateTime?
+  createdAt                    DateTime                  @default(now())
+  updatedAt                    DateTime                  @updatedAt
+  customer                     Customer                  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  location                     SalonLocation             @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  bookingSlot                  BookingSlot               @relation(fields: [bookingSlotId], references: [id], onDelete: Restrict)
+  hairstyle                    Hairstyle?                @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  hairstyleVariant             HairstyleVariant?         @relation(fields: [hairstyleVariantId], references: [id], onDelete: Restrict)
+  payments                     Payment[]
+  events                       AppointmentEvent[]
+  confirmationEmail            BookingConfirmationEmail?
 
   @@index([appointmentDate, status])
   @@index([locationId, appointmentDate, bookingSlotId])
   @@index([customerId])
   @@index([holdExpiresAt])
+  @@index([hairstyleVariantId])
 }
 
 /// Durable post-commit confirmation email intent. One confirmed appointment

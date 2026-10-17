@@ -36,6 +36,12 @@ export const mediaOrder = [
   { id: "asc" },
 ] satisfies Prisma.HairstyleMediaOrderByWithRelationInput[];
 
+export const variantOrder = [
+  { sortOrder: "asc" },
+  { createdAt: "asc" },
+  { id: "asc" },
+] satisfies Prisma.HairstyleVariantOrderByWithRelationInput[];
+
 // ---------------------------------------------------------------------------
 // Public visibility
 // ---------------------------------------------------------------------------
@@ -99,6 +105,8 @@ export type AdminHairstyle = {
   name: string;
   slug: string;
   description: string | null;
+  priceCents: number | null;
+  requiresVariant: boolean;
   isActive: boolean;
   sortOrder: number;
   category: { id: string; name: string; slug: string; isActive: boolean };
@@ -108,7 +116,21 @@ export type AdminHairstyle = {
   updatedAt: Date;
 };
 
-export type AdminHairstyleDetail = AdminHairstyle & { media: AdminMedia[] };
+export type AdminHairstyleVariant = {
+  id: string;
+  hairstyleId: string;
+  name: string;
+  priceCents: number | null;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type AdminHairstyleDetail = AdminHairstyle & {
+  media: AdminMedia[];
+  variants: AdminHairstyleVariant[];
+};
 
 export const adminCategorySelect = {
   id: true,
@@ -138,12 +160,25 @@ export const adminHairstyleSelect = {
   name: true,
   slug: true,
   description: true,
+  priceCents: true,
+  requiresVariant: true,
   isActive: true,
   sortOrder: true,
   createdAt: true,
   updatedAt: true,
   category: { select: { id: true, name: true, slug: true, isActive: true } },
 } satisfies Prisma.HairstyleSelect;
+
+export const adminHairstyleVariantSelect = {
+  id: true,
+  hairstyleId: true,
+  name: true,
+  priceCents: true,
+  isActive: true,
+  sortOrder: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.HairstyleVariantSelect;
 
 type AdminHairstyleRow = Prisma.HairstyleGetPayload<{
   select: typeof adminHairstyleSelect;

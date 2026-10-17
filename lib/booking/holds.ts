@@ -1,13 +1,12 @@
 import { Prisma } from "@prisma/client";
 
-import { publiclyVisibleHairstyle } from "@/lib/catalog";
 import { prisma } from "@/lib/prisma";
 
 import { appendAppointmentEvent, eventDetails } from "./appointment-events";
 import { dateClosedReason, locationClosedReason, slotClosedReason } from "./booking-policy";
 import { countConsumedCapacity, lockBookingSlotCapacity, remainingCapacity } from "./capacity";
 import { BookingError } from "./errors";
-import { v1BookingPriceSnapshot } from "./pricing";
+import { resolveCatalogBookingPrice, v1BookingPriceSnapshot } from "./pricing";
 import {
   parseSalonDate,
   salonClockTimeFromDatabase,
@@ -58,6 +57,7 @@ export type AcquireBookingHoldInput = {
   appointmentDate: string;
   /** Optional; must be publicly visible (active hairstyle in an active category). */
   hairstyleId?: string | null;
+  hairstyleVariantId?: string | null;
   preferredStylistName?: string | null;
   customerNotes?: string | null;
 };
@@ -74,6 +74,9 @@ export type BookingHold = {
   slotTimeSnapshot: string;
   hairstyleId: string | null;
   hairstyleNameSnapshot: string | null;
+  hairstyleVariantId: string | null;
+  hairstyleVariantNameSnapshot: string | null;
+  currency: string | null;
   preferredStylistName: string | null;
   customerNotes: string | null;
   totalPriceCents: number;
@@ -116,7 +119,6 @@ export async function acquireBookingHold(
   if (!customer) {
     throw new BookingError("CUSTOMER_NOT_FOUND", `Customer ${input.customerId} does not exist.`);
   }
-  const hairstyle = await findPublicHairstyle(input.hairstyleId);
 
   // 3. Capacity acquisition — serialized per BookingSlot.
   const appointment = await prisma.$transaction(
@@ -170,6 +172,10 @@ export async function acquireBookingHold(
         throw new BookingError("CAPACITY_FULL", "This booking slot is full on that date.");
       }
 
+      const catalogPricing = input.hairstyleId
+        ? await resolveCatalogBookingPrice(tx, { hairstyleId: input.hairstyleId, hairstyleVariantId: input.hairstyleVariantId })
+        : null;
+      const pricing = catalogPricing ?? v1BookingPriceSnapshot();
       const created = await tx.appointment.create({
         data: {
           status: "PENDING_PAYMENT",
@@ -178,14 +184,17 @@ export async function acquireBookingHold(
           locationId: location.id,
           bookingSlotId: slot.id,
           appointmentDate: salonDateToDatabase(appointmentDate),
-          hairstyleId: hairstyle?.id ?? null,
+          hairstyleId: catalogPricing?.hairstyleId ?? null,
+          hairstyleVariantId: catalogPricing?.hairstyleVariantId ?? null,
           preferredStylistName: optionalText(input.preferredStylistName),
           customerNotes: optionalText(input.customerNotes),
           // Booking-time facts: never recomputed from current configuration.
           locationNameSnapshot: location.name,
           slotTimeSnapshot: salonClockTimeFromDatabase(slot.localStartTime),
-          hairstyleNameSnapshot: hairstyle?.name ?? null,
-          ...v1BookingPriceSnapshot(),
+          hairstyleNameSnapshot: catalogPricing?.hairstyleNameSnapshot ?? null,
+          hairstyleVariantNameSnapshot: catalogPricing?.hairstyleVariantNameSnapshot ?? null,
+          ...pricing,
+          currency: pricing.currency ?? "usd",
         },
       });
 
@@ -208,10 +217,10 @@ export async function acquireBookingHold(
           },
           hairstyleId: created.hairstyleId,
           hairstyleNameSnapshot: created.hairstyleNameSnapshot,
+          hairstyleVariantId: created.hairstyleVariantId,
+          hairstyleVariantNameSnapshot: created.hairstyleVariantNameSnapshot,
           pricing: {
-            totalPriceCents: created.totalPriceCents,
-            depositAmountCents: created.depositAmountCents,
-            balanceDueCents: created.balanceDueCents,
+            totalPriceCents: created.totalPriceCents, depositAmountCents: created.depositAmountCents, balanceDueCents: created.balanceDueCents, currency: "usd",
           },
         }),
       );
@@ -233,6 +242,9 @@ export async function acquireBookingHold(
     slotTimeSnapshot: appointment.slotTimeSnapshot,
     hairstyleId: appointment.hairstyleId,
     hairstyleNameSnapshot: appointment.hairstyleNameSnapshot,
+    hairstyleVariantId: appointment.hairstyleVariantId,
+    hairstyleVariantNameSnapshot: appointment.hairstyleVariantNameSnapshot,
+    currency: appointment.currency,
     preferredStylistName: appointment.preferredStylistName,
     customerNotes: appointment.customerNotes,
     totalPriceCents: appointment.totalPriceCents,
@@ -240,23 +252,6 @@ export async function acquireBookingHold(
     balanceDueCents: appointment.balanceDueCents,
     createdAt: appointment.createdAt,
   };
-}
-
-/** Reuses the YASMIN-1B public-catalog rule: active hairstyle in an active category. */
-async function findPublicHairstyle(hairstyleId: string | null | undefined) {
-  if (hairstyleId === undefined || hairstyleId === null) return null;
-
-  const hairstyle = await prisma.hairstyle.findFirst({
-    where: { id: hairstyleId, ...publiclyVisibleHairstyle },
-    select: { id: true, name: true },
-  });
-  if (!hairstyle) {
-    throw new BookingError(
-      "HAIRSTYLE_NOT_AVAILABLE",
-      `Hairstyle ${hairstyleId} is not available for online booking.`,
-    );
-  }
-  return hairstyle;
 }
 
 function optionalText(value: string | null | undefined): string | null {

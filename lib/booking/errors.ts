@@ -18,6 +18,9 @@ export type BookingErrorCode =
   | "CAPACITY_FULL"
   | "CUSTOMER_NOT_FOUND"
   | "HAIRSTYLE_NOT_AVAILABLE"
+  | "HAIRSTYLE_VARIANT_REQUIRED"
+  | "HAIRSTYLE_VARIANT_NOT_AVAILABLE"
+  | "HAIRSTYLE_VARIANT_NOT_ALLOWED"
   | "APPOINTMENT_NOT_FOUND"
   /** The lifecycle command is not allowed from the appointment's current status. */
   | "INVALID_APPOINTMENT_TRANSITION"

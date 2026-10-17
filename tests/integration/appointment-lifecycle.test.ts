@@ -198,7 +198,9 @@ describe("lifecycle preserves the appointment, money, payments, and history", { 
       },
       hairstyleId: null,
       hairstyleNameSnapshot: null,
-      pricing: { totalPriceCents: 20000, depositAmountCents: 4000, balanceDueCents: 16000 },
+      hairstyleVariantId: null,
+      hairstyleVariantNameSnapshot: null,
+      pricing: { totalPriceCents: 20000, depositAmountCents: 4000, balanceDueCents: 16000, currency: "usd" },
     });
   });
 

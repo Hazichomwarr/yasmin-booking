@@ -46,6 +46,8 @@ export type CreatedEventDetails = {
   schedule: ScheduleFacts;
   hairstyleId: string | null;
   hairstyleNameSnapshot: string | null;
+  hairstyleVariantId?: string | null;
+  hairstyleVariantNameSnapshot?: string | null;
   pricing: BookingPriceSnapshot;
 };
 

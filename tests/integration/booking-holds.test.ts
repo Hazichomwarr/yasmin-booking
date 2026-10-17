@@ -87,7 +87,7 @@ describe("booking hold policy", { skip: integrationSkip }, () => {
   it("accepts an active hairstyle in an active category and snapshots its name", async () => {
     const { hold } = await bookable();
     const category = await createCategory({ name: "Braids", slug: "braids" });
-    const hairstyle = await createHairstyle({ categoryId: category.id, name: "Knotless", slug: "knotless" });
+    const hairstyle = await createHairstyle({ categoryId: category.id, name: "Knotless", slug: "knotless", priceCents: 20_000 });
 
     const result = await hold(WEEK.monday, { hairstyleId: hairstyle.id });
     assert.equal(result.hairstyleId, hairstyle.id);
@@ -148,7 +148,7 @@ describe("booking hold snapshots", { skip: integrationSkip }, () => {
     const { location, slot } = await createLocation({ name: "Test Street", slots: [{ time: "11:00" }] });
     const customer = await createCustomer();
     const category = await createCategory({ name: "Braids", slug: "braids" });
-    const hairstyle = await createHairstyle({ categoryId: category.id, name: "Knotless", slug: "knotless" });
+    const hairstyle = await createHairstyle({ categoryId: category.id, name: "Knotless", slug: "knotless", priceCents: 20_000 });
 
     const hold = await acquireBookingHold(
       {

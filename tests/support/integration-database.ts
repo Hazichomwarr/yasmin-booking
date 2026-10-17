@@ -23,11 +23,16 @@ export function useCleanTestDatabase() {
   });
 
   beforeEach(async () => {
+    // Fault-injection tests use database triggers so they can prove rollback.
+    // A killed test process cannot execute its local `finally`, so remove only
+    // the named, test-only artifacts before the next isolated test begins.
+    // This deliberately does not touch application triggers or migrations.
+    await removeOrphanedTestFaults();
     await prisma.$executeRawUnsafe(`
       TRUNCATE "StripeWebhookEvent", "PaymentProcessingException", "RateLimitCounter", "MarketingConsentEvent",
                "AppointmentEvent", "Payment", "Appointment", "Customer",
                "BookingSlot", "SalonLocation",
-               "HairstyleMedia", "Hairstyle", "HairstyleCategory",
+               "HairstyleMedia", "HairstyleVariant", "Hairstyle", "HairstyleCategory",
                "AdminSession", "AdminUser"
       CASCADE
     `);
@@ -36,4 +41,24 @@ export function useCleanTestDatabase() {
   after(async () => {
     await prisma.$disconnect();
   });
+}
+
+async function removeOrphanedTestFaults() {
+  for (const [trigger, table] of [
+    ["checkout_test_fault_trigger", "Payment"],
+    ["checkout_test_fault_trigger", "Appointment"],
+    ["checkout_test_fault_trigger", "AppointmentEvent"],
+    ["public_booking_fault_trigger", "Appointment"],
+    ["public_booking_fault_trigger", "AppointmentEvent"],
+    ["test_fail_commit", "Appointment"],
+    ["test_fail_write", "Appointment"],
+    ["test_fail_write", "AppointmentEvent"],
+    ["test_fail_write", "Payment"],
+    ["consent_test_fault", "MarketingConsentEvent"],
+  ]) {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${trigger}" ON "${table}"`);
+  }
+  for (const name of ["checkout_test_fault", "public_booking_fault", "test_fail_commit", "test_fail_write", "consent_test_fault"]) {
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${name}"()`);
+  }
 }

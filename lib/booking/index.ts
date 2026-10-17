@@ -90,9 +90,13 @@ export {
 } from "./holds";
 
 export {
+  YASMIN_BOOKING_CURRENCY,
+  YASMIN_DEPOSIT_CENTS,
   YASMIN_V1_DEPOSIT_CENTS,
   YASMIN_V1_TOTAL_PRICE_CENTS,
+  resolveCatalogBookingPrice,
   v1BookingPriceSnapshot,
+  type CatalogBookingSnapshot,
   type BookingPriceSnapshot,
 } from "./pricing";
 

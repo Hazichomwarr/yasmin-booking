@@ -1,6 +1,5 @@
 import { Prisma } from "@prisma/client";
 
-import { publiclyVisibleHairstyle } from "@/lib/catalog";
 import { recordPublicFormConsent } from "@/lib/customers/marketing-consent";
 import { prisma } from "@/lib/prisma";
 
@@ -11,7 +10,7 @@ import { dateClosedReason, locationClosedReason, publicBookingWindowClosedReason
 import { countConsumedCapacity, lockBookingSlotCapacity, remainingCapacity } from "./capacity";
 import { BookingError } from "./errors";
 import { BOOKING_HOLD_MINUTES } from "./holds";
-import { v1BookingPriceSnapshot } from "./pricing";
+import { resolveCatalogBookingPrice, v1BookingPriceSnapshot } from "./pricing";
 import { PUBLIC_BOOKING_LIMITS as LIMITS, PUBLIC_EMAIL_PATTERN, PUBLIC_PHONE_PATTERN } from "./public-booking-rules";
 import { parseSalonDate, salonClockTimeFromDatabase, salonDateToDatabase } from "./salon-calendar";
 
@@ -23,6 +22,7 @@ export type PublicBookingInput = {
   bookingSlotId: string;
   appointmentDate: string;
   hairstyleId?: string | null;
+  hairstyleVariantId?: string | null;
   preferredStylistName?: string | null;
   customerNotes?: string | null;
   emailMarketingConsent?: boolean;
@@ -63,7 +63,7 @@ export class PublicBookingValidationError extends Error {
   constructor(message: string) { super(message); }
 }
 
-const allowed = new Set(["name", "email", "phone", "locationId", "bookingSlotId", "appointmentDate", "hairstyleId", "preferredStylistName", "customerNotes", "emailMarketingConsent", "smsMarketingConsent"]);
+const allowed = new Set(["name", "email", "phone", "locationId", "bookingSlotId", "appointmentDate", "hairstyleId", "hairstyleVariantId", "preferredStylistName", "customerNotes", "emailMarketingConsent", "smsMarketingConsent"]);
 
 export async function createPublicBooking(value: unknown, options: PublicBookingCreateOptions = {}): Promise<PublicBookingResult> {
   const input = parsePublicBookingInput(value);
@@ -92,14 +92,16 @@ export async function createPublicBooking(value: unknown, options: PublicBooking
     if (windowReason) throw new BookingError(windowReason, "This date or time is outside the online booking window.");
     const consumed = await countConsumedCapacity(tx, { bookingSlotId: slot.id, appointmentDate: date }, now);
     if (remainingCapacity(slot.capacity, consumed) === 0) throw new BookingError("CAPACITY_FULL", "Slot is full.");
-    const hairstyle = input.hairstyleId ? await tx.hairstyle.findFirst({ where: { id: input.hairstyleId, ...publiclyVisibleHairstyle }, select: { id: true, name: true } }) : null;
-    if (input.hairstyleId && !hairstyle) throw new BookingError("HAIRSTYLE_NOT_AVAILABLE", "Hairstyle is not available.");
+    const catalogPricing = input.hairstyleId
+      ? await resolveCatalogBookingPrice(tx, { hairstyleId: input.hairstyleId, hairstyleVariantId: input.hairstyleVariantId })
+      : null;
+    const pricing = catalogPricing ?? v1BookingPriceSnapshot();
     const customer = await tx.customer.create({ data: { name: input.name, email: input.email, phone: input.phone, emailMarketingAt: input.emailMarketingConsent ? now : null, smsMarketingAt: input.smsMarketingConsent ? now : null } });
     // Marketing consent is optional, per channel, and separate from the booking itself.
     await recordPublicFormConsent(tx, customer.id, { email: input.emailMarketingConsent === true, sms: input.smsMarketingConsent === true }, now);
-    const appointment = await tx.appointment.create({ data: { customerId: customer.id, locationId: location.id, bookingSlotId: slot.id, appointmentDate: salonDateToDatabase(date), status: "PENDING_PAYMENT", holdExpiresAt: new Date(now.getTime() + BOOKING_HOLD_MINUTES * 60_000), hairstyleId: hairstyle?.id ?? null, preferredStylistName: text(input.preferredStylistName), customerNotes: text(input.customerNotes), locationNameSnapshot: location.name, slotTimeSnapshot: salonClockTimeFromDatabase(slot.localStartTime), hairstyleNameSnapshot: hairstyle?.name ?? null, ...v1BookingPriceSnapshot() } });
+    const appointment = await tx.appointment.create({ data: { customerId: customer.id, locationId: location.id, bookingSlotId: slot.id, appointmentDate: salonDateToDatabase(date), status: "PENDING_PAYMENT", holdExpiresAt: new Date(now.getTime() + BOOKING_HOLD_MINUTES * 60_000), hairstyleId: catalogPricing?.hairstyleId ?? null, hairstyleVariantId: catalogPricing?.hairstyleVariantId ?? null, preferredStylistName: text(input.preferredStylistName), customerNotes: text(input.customerNotes), locationNameSnapshot: location.name, slotTimeSnapshot: salonClockTimeFromDatabase(slot.localStartTime), hairstyleNameSnapshot: catalogPricing?.hairstyleNameSnapshot ?? null, hairstyleVariantNameSnapshot: catalogPricing?.hairstyleVariantNameSnapshot ?? null, ...pricing, currency: pricing.currency ?? "usd" } });
     const access = await issueBookingAccess(tx, appointment.id);
-    await appendAppointmentEvent(tx, appointment.id, "CREATED", eventDetails.created({ status: appointment.status, holdExpiresAt: appointment.holdExpiresAt!.toISOString(), schedule: { locationId: location.id, locationName: location.name, timeZone: location.timeZone, bookingSlotId: slot.id, appointmentDate: date, slotTime: appointment.slotTimeSnapshot }, hairstyleId: appointment.hairstyleId, hairstyleNameSnapshot: appointment.hairstyleNameSnapshot, pricing: v1BookingPriceSnapshot() }));
+    await appendAppointmentEvent(tx, appointment.id, "CREATED", eventDetails.created({ status: appointment.status, holdExpiresAt: appointment.holdExpiresAt!.toISOString(), schedule: { locationId: location.id, locationName: location.name, timeZone: location.timeZone, bookingSlotId: slot.id, appointmentDate: date, slotTime: appointment.slotTimeSnapshot }, hairstyleId: appointment.hairstyleId, hairstyleNameSnapshot: appointment.hairstyleNameSnapshot, hairstyleVariantId: appointment.hairstyleVariantId, hairstyleVariantNameSnapshot: appointment.hairstyleVariantNameSnapshot, pricing }));
     return { booking: { appointmentId: appointment.id, locationName: location.name, appointmentDate: date, slotTime: appointment.slotTimeSnapshot, holdExpiresAt: appointment.holdExpiresAt!, totalPriceCents: appointment.totalPriceCents, depositAmountCents: appointment.depositAmountCents, balanceDueCents: appointment.balanceDueCents }, accessToken: access.token, accessExpiresAt: access.expiresAt };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
@@ -164,7 +166,7 @@ export function parsePublicBookingInput(value: unknown): PublicBookingInput {
   if (Object.keys(record).some((key) => !allowed.has(key))) throw new PublicBookingValidationError("Unknown public booking field.");
   const required = ["name", "email", "phone", "locationId", "bookingSlotId", "appointmentDate"] as const;
   for (const key of required) if (typeof record[key] !== "string" || !record[key].trim()) throw new PublicBookingValidationError(`Invalid ${key}.`);
-  for (const key of ["hairstyleId", "preferredStylistName", "customerNotes"]) if (record[key] !== undefined && record[key] !== null && typeof record[key] !== "string") throw new PublicBookingValidationError(`Invalid ${key}.`);
+  for (const key of ["hairstyleId", "hairstyleVariantId", "preferredStylistName", "customerNotes"]) if (record[key] !== undefined && record[key] !== null && typeof record[key] !== "string") throw new PublicBookingValidationError(`Invalid ${key}.`);
   for (const key of ["emailMarketingConsent", "smsMarketingConsent"]) if (record[key] !== undefined && typeof record[key] !== "boolean") throw new PublicBookingValidationError(`Invalid ${key}.`);
   const normalized = {
     ...record,
