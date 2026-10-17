@@ -38,7 +38,7 @@ export function AdminLoginForm() {
   }
 
   return (
-    <form onSubmit={submit} noValidate>
+    <form method="post" onSubmit={submit} noValidate>
       {error && <p ref={alertRef} tabIndex={-1} className={styles.error} role="alert">{error}</p>}
       <label>Email<input name="email" type="email" autoComplete="username" inputMode="email" required maxLength={254} /></label>
       <label>Password<input name="password" type="password" autoComplete="current-password" required maxLength={256} /></label>

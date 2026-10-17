@@ -6,6 +6,8 @@ import type { AppointmentStatus } from "@prisma/client";
 import { ADMIN_PAGE_SIZE, ADMIN_TIME_ZONE, getAdminAppointmentDetail, getAdminDashboard, listAdminAppointments, parseAdminAppointmentFilters } from "@/lib/admin/appointments";
 import { resolveAdminSession, signInAdmin, type AdminAccess } from "@/lib/admin/auth";
 import { provisionAdminPassword } from "@/lib/admin/provision";
+import { getAdminRescheduleAvailability } from "@/lib/admin/reschedule-availability";
+import { isBookingError } from "@/lib/booking/errors";
 import { addSalonDays, salonToday, type SalonDate } from "@/lib/booking/salon-calendar";
 import { prisma } from "@/lib/prisma";
 
@@ -201,5 +203,34 @@ describe("admin appointment reads", { skip: integrationSkip }, () => {
     const text = JSON.stringify(detail);
     for (const secret of ["cs_test_admin", "pi_test_admin", "a".repeat(64), "secret-payment-id", "evt_test_secret", booked.customerId]) assert.equal(text.includes(secret), false, secret);
     assert.equal(await getAdminAppointmentDetail(access, "does-not-exist"), null);
+  });
+
+  it("returns only future, active, capacity-available slots for an admin reschedule", async () => {
+    const access = await adminAccess();
+    const { location, slots } = await createLocation({ slots: [{ time: "05:00", capacity: 1 }, { time: "11:00", capacity: 1 }, { time: "14:00", capacity: 1, isActive: false }] });
+    const today = salonToday(ADMIN_TIME_ZONE, await databaseNow());
+    const date = addSalonDays(today, 2);
+    const booked = await appointment(slots[0], date, "CONFIRMED");
+    await appointment(slots[1], date, "CONFIRMED");
+
+    const availability = await getAdminRescheduleAvailability(access, { appointmentId: booked.id, appointmentDate: date });
+    assert.ok(availability);
+    assert.equal(availability.locationId, location.id);
+    // The current booking counts in informational availability, and the other
+    // active slot is full; inactive slots never appear.
+    assert.deepEqual(availability.slots, []);
+    assert.equal(availability.closedReason, null);
+  });
+
+  it("does not disclose reschedule availability for an ineligible appointment", async () => {
+    const access = await adminAccess();
+    const [slot] = await place();
+    const date = addSalonDays(salonToday(ADMIN_TIME_ZONE, await databaseNow()), 2);
+    const booked = await appointment(slot, date, "PENDING_PAYMENT", { holdMinutes: 10 });
+
+    await assert.rejects(
+      getAdminRescheduleAvailability(access, { appointmentId: booked.id, appointmentDate: date }),
+      (error: unknown) => isBookingError(error, "APPOINTMENT_NOT_RESCHEDULABLE"),
+    );
   });
 });

@@ -21,6 +21,9 @@ export type TestDatabaseResolution =
   | { status: "ready"; url: string }
   | { status: "not-configured"; reason: string };
 
+/** The only database that browser-acceptance helpers may mutate. */
+export const BROWSER_TEST_DATABASE = "yasmin_booking_test";
+
 export function resolveTestDatabase(): TestDatabaseResolution {
   const url = process.env.TEST_DATABASE_URL?.trim();
   if (!url) {
@@ -52,6 +55,33 @@ export function resolveTestDatabase(): TestDatabaseResolution {
   }
 
   return { status: "ready", url };
+}
+
+/**
+ * A deliberately narrower gate for browser fixtures and the browser dev
+ * server. Unlike the general integration suite, browser acceptance has one
+ * named, loopback-only target. This runs before those helpers import Prisma.
+ */
+export function resolveBrowserTestDatabase(): TestDatabaseResolution {
+  const resolution = resolveTestDatabase();
+  if (resolution.status !== "ready") return resolution;
+  assertBrowserTestDatabaseTarget(resolution.url);
+  return resolution;
+}
+
+/** Pure target check, kept exportable so it can be tested without a database connection. */
+export function assertBrowserTestDatabaseTarget(url: string): void {
+  const target = parseDatabaseUrl(url, "TEST_DATABASE_URL");
+  const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+  if (target.host.endsWith(".neon.tech")) {
+    throw new Error("Refusing browser acceptance: Neon database hosts are never allowed.");
+  }
+  if (!loopbackHosts.has(target.host)) {
+    throw new Error("Refusing browser acceptance: the database host must be local loopback.");
+  }
+  if (target.database !== BROWSER_TEST_DATABASE) {
+    throw new Error(`Refusing browser acceptance: database must be ${BROWSER_TEST_DATABASE}.`);
+  }
 }
 
 function configuredApplicationUrls(): [string, string][] {

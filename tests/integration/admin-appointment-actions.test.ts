@@ -61,7 +61,10 @@ async function confirmedPlace(options: { capacity?: number } = {}) {
 
 const eventsOf = (appointmentId: string) => prisma.appointmentEvent.findMany({ where: { appointmentId }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
 
-describe("admin cancellation", { skip: integrationSkip }, () => {
+// Each nested suite truncates the same guarded database before every case.
+// Node runs root suites concurrently unless they share this serial parent.
+describe("admin appointment actions", { skip: integrationSkip, concurrency: false }, () => {
+describe("admin cancellation", { skip: integrationSkip, concurrency: false }, () => {
   useCleanTestDatabase();
 
   it("cancels, keeps every record and snapshot, attributes the event, and releases capacity once", async () => {
@@ -161,7 +164,7 @@ describe("admin cancellation", { skip: integrationSkip }, () => {
   });
 });
 
-describe("admin completion and no-show", { skip: integrationSkip }, () => {
+describe("admin completion and no-show", { skip: integrationSkip, concurrency: false }, () => {
   useCleanTestDatabase();
 
   it("only after the visit's salon-local start, from CONFIRMED, preserving payment and history", async () => {
@@ -219,7 +222,7 @@ describe("admin completion and no-show", { skip: integrationSkip }, () => {
   });
 });
 
-describe("admin reschedule", { skip: integrationSkip }, () => {
+describe("admin reschedule", { skip: integrationSkip, concurrency: false }, () => {
   useCleanTestDatabase();
 
   it("moves atomically, keeps id, money and payment, records before/after, and moves capacity", async () => {
@@ -316,7 +319,7 @@ describe("admin reschedule", { skip: integrationSkip }, () => {
   });
 });
 
-describe("admin action safety", { skip: integrationSkip }, () => {
+describe("admin action safety", { skip: integrationSkip, concurrency: false }, () => {
   useCleanTestDatabase();
 
   it("refuses a stale view without changing anything", async () => {
@@ -372,4 +375,5 @@ describe("admin action safety", { skip: integrationSkip }, () => {
     await assert.rejects(prisma.appointmentEvent.create({ data: { appointmentId: booked.id, type: "NOTE_UPDATED", operationId: randomUUID() } }), /AppointmentEvent_admin_attribution_complete/);
     await assert.rejects(prisma.appointmentEvent.create({ data: { appointmentId: booked.id, type: "CANCELLED", actorAdminUserId: access.adminUserId, operationId: randomUUID() } }), /AppointmentEvent_required_action_reason/);
   });
+});
 });

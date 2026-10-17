@@ -228,6 +228,7 @@ export type AdminAppointmentDetail = AdminAppointmentSummary & {
   balanceDueCents: number;
   holdExpiresAt: Date | null;
   createdAt: Date;
+  updatedAt: Date;
   /** Audit trail: event types and times only (details may hold internal identifiers). */
   history: Array<{ type: AppointmentEventType; at: Date }>;
 };
@@ -242,6 +243,7 @@ export async function getAdminAppointmentDetail(access: AdminAccess, appointment
       preferredStylistName: true,
       customerNotes: true,
       createdAt: true,
+      updatedAt: true,
       customer: { select: { name: true, email: true, phone: true } },
       location: { select: { name: true, timeZone: true, ...salonAddressSelect } },
       events: { select: { type: true, createdAt: true }, orderBy: { createdAt: "asc" } },
@@ -260,6 +262,7 @@ export async function getAdminAppointmentDetail(access: AdminAccess, appointment
     balanceDueCents: row.balanceDueCents,
     holdExpiresAt: row.holdExpiresAt,
     createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
     history: row.events.map((event) => ({ type: event.type, at: event.createdAt })),
   };
 }

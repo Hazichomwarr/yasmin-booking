@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminAppointmentActions } from "@/components/admin/AdminAppointmentActions";
 import { STATUS_LABELS, dateLabel, instantLabel, money, timeLabel, zoneShort } from "@/components/admin/admin-format";
 import styles from "@/components/admin/Admin.module.css";
 import { getAdminAppointmentDetail } from "@/lib/admin/appointments";
@@ -52,6 +53,17 @@ export default async function AdminAppointmentDetailPage({ params }: PageProps<"
           <dt>Remaining balance</dt><dd>{money(payment.remainingCents)}{payment.depositPaid ? " due after service" : " (deposit not paid)"}</dd>
         </dl>
       </section>
+      <AdminAppointmentActions appointment={{
+        id: detail.id,
+        status: detail.status,
+        customerName: detail.customer.name,
+        hairstyleName: detail.hairstyleName,
+        appointmentDate: detail.appointmentDate,
+        slotTime: detail.slotTime,
+        updatedAt: detail.updatedAt.toISOString(),
+        depositReceived: detail.payment.depositPaid,
+        hasOpenCheckout: detail.payment.depositState === "checkout-started",
+      }} />
       <section className={styles.panel} aria-label="History">
         <h2>History</h2>
         {detail.history.length === 0 ? <p className={styles.empty}>No recorded events.</p> : (
