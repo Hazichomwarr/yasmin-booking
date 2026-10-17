@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -99,14 +99,14 @@ model SalonLocation {
 }
 
 model BookingSlot {
-  id             String          @id @default(cuid())
+  id             String        @id @default(cuid())
   locationId     String
-  localStartTime DateTime        @db.Time(0)
+  localStartTime DateTime      @db.Time(0)
   capacity       Int
-  isActive       Boolean         @default(true)
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  location       SalonLocation   @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  location       SalonLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
   appointments   Appointment[]
 
   @@unique([locationId, localStartTime])
@@ -114,20 +114,20 @@ model BookingSlot {
 }
 
 model Customer {
-  id                 String        @id @default(cuid())
-  name               String
-  email              String
-  phone              String
+  id                     String                  @id @default(cuid())
+  name                   String
+  email                  String
+  phone                  String
   /// When the customer's CURRENT email-marketing consent was granted; null =
   /// not consented. Evidence for the grant (and every withdrawal) lives in
   /// MarketingConsentEvent; a timestamp without a matching GRANTED event
   /// predates evidence capture and its evidence is unknown.
-  emailMarketingAt   DateTime?
+  emailMarketingAt       DateTime?
   /// As emailMarketingAt, for SMS marketing.
-  smsMarketingAt     DateTime?
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
-  appointments       Appointment[]
+  smsMarketingAt         DateTime?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  appointments           Appointment[]
   marketingConsentEvents MarketingConsentEvent[]
 
   @@index([email])
@@ -149,46 +149,46 @@ model HairstyleCategory {
 }
 
 model Hairstyle {
-  id          String             @id @default(cuid())
-  categoryId  String
-  name        String
-  slug        String             @unique
-  description String?
-  isActive    Boolean            @default(true)
-  sortOrder   Int                @default(0)
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
-  category    HairstyleCategory  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  media       HairstyleMedia[]
+  id           String            @id @default(cuid())
+  categoryId   String
+  name         String
+  slug         String            @unique
+  description  String?
+  isActive     Boolean           @default(true)
+  sortOrder    Int               @default(0)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  category     HairstyleCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  media        HairstyleMedia[]
   appointments Appointment[]
 
   @@index([categoryId, isActive, sortOrder])
 }
 
 model HairstyleMedia {
-  id          String      @id @default(cuid())
+  id          String    @id @default(cuid())
   hairstyleId String
   type        MediaType
-  storageKey  String      @unique
+  storageKey  String    @unique
   deliveryUrl String?
   altText     String?
   caption     String?
-  sortOrder   Int         @default(0)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  hairstyle   Hairstyle   @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  hairstyle   Hairstyle @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
 
   @@index([hairstyleId, type, sortOrder])
 }
 
 model Appointment {
-  id                    String             @id @default(cuid())
+  id                    String                    @id @default(cuid())
   customerId            String
   locationId            String
   bookingSlotId         String
   hairstyleId           String?
-  appointmentDate       DateTime           @db.Date
-  status                AppointmentStatus  @default(PENDING_PAYMENT)
+  appointmentDate       DateTime                  @db.Date
+  status                AppointmentStatus         @default(PENDING_PAYMENT)
   preferredStylistName  String?
   customerNotes         String?
   holdExpiresAt         DateTime?
@@ -202,17 +202,17 @@ model Appointment {
   /// The token itself is never stored. Never selected into appointment views.
   /// Hash, issuedAt and expiresAt are all set or all null (CHECK constraint in
   /// migration 20261014120000_booking_access_foundation); null = no public access.
-  accessTokenHash       String?            @unique
+  accessTokenHash       String?                   @unique
   accessTokenIssuedAt   DateTime?
   accessTokenExpiresAt  DateTime?
   /// Set once by revocation; requires a token. Never cleared.
   accessTokenRevokedAt  DateTime?
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
-  customer              Customer           @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  location              SalonLocation      @relation(fields: [locationId], references: [id], onDelete: Restrict)
-  bookingSlot           BookingSlot        @relation(fields: [bookingSlotId], references: [id], onDelete: Restrict)
-  hairstyle             Hairstyle?         @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  customer              Customer                  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  location              SalonLocation             @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  bookingSlot           BookingSlot               @relation(fields: [bookingSlotId], references: [id], onDelete: Restrict)
+  hairstyle             Hairstyle?                @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
   payments              Payment[]
   events                AppointmentEvent[]
   confirmationEmail     BookingConfirmationEmail?
@@ -227,18 +227,18 @@ model Appointment {
 /// can produce one delivery record; provider work is never part of payment
 /// fulfillment's database transaction.
 model BookingConfirmationEmail {
-  id                  String                 @id @default(cuid())
-  appointmentId       String                 @unique
-  recipientEmail      String
-  state               ConfirmationEmailState @default(PENDING)
-  attemptCount        Int                    @default(0)
-  lastAttemptAt       DateTime?
-  sentAt              DateTime?
-  providerMessageId   String?
-  lastError           String?
-  createdAt           DateTime               @default(now())
-  updatedAt           DateTime               @updatedAt
-  appointment         Appointment            @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  id                String                 @id @default(cuid())
+  appointmentId     String                 @unique
+  recipientEmail    String
+  state             ConfirmationEmailState @default(PENDING)
+  attemptCount      Int                    @default(0)
+  lastAttemptAt     DateTime?
+  sentAt            DateTime?
+  providerMessageId String?
+  lastError         String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  appointment       Appointment            @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
 
   @@index([state, createdAt])
 }
@@ -263,32 +263,32 @@ model BookingConfirmationEmail {
 // - No payment confirmation may bypass the capacity policy.
 // - A paid but unallocated charge must remain discoverable.
 model Payment {
-  id                        String                       @id @default(cuid())
-  appointmentId             String
-  provider                  PaymentProvider
-  purpose                   PaymentPurpose
-  status                    PaymentStatus                @default(PENDING)
-  amountCents               Int
-  currency                  String                       @default("usd")
-  providerCheckoutSessionId String?                      @unique
-  providerPaymentIntentId   String?                      @unique
+  id                         String                       @id @default(cuid())
+  appointmentId              String
+  provider                   PaymentProvider
+  purpose                    PaymentPurpose
+  status                     PaymentStatus                @default(PENDING)
+  amountCents                Int
+  currency                   String                       @default("usd")
+  providerCheckoutSessionId  String?                      @unique
+  providerPaymentIntentId    String?                      @unique
   /// The Checkout Session expiry fixed when this attempt was created.
-  providerCheckoutExpiresAt DateTime?
+  providerCheckoutExpiresAt  DateTime?
   /// Fences the one Stripe create/recovery caller allowed outside DB locks.
   checkoutRecoveryLeaseToken String?
   checkoutRecoveryLeasedAt   DateTime?
-  paidAt                    DateTime?
+  paidAt                     DateTime?
   /// Set once, when this charge confirmed its appointment. Never cleared.
-  allocatedAt               DateTime?
+  allocatedAt                DateTime?
   /// Sum of SUCCEEDED Stripe refunds, from the latest verified snapshot.
-  refundedAmountCents       Int                          @default(0)
-  refundsSyncedAt           DateTime?
-  reconciliationReason      PaymentReconciliationReason?
+  refundedAmountCents        Int                          @default(0)
+  refundsSyncedAt            DateTime?
+  reconciliationReason       PaymentReconciliationReason?
   /// Informational only. Never evidence of allocation or refund.
-  reconciliationNote        String?
-  createdAt                 DateTime                     @default(now())
-  updatedAt                 DateTime                     @updatedAt
-  appointment               Appointment                  @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  reconciliationNote         String?
+  createdAt                  DateTime                     @default(now())
+  updatedAt                  DateTime                     @updatedAt
+  appointment                Appointment                  @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
 
   /// One deposit attempt per appointment.
   @@unique([appointmentId, purpose])
@@ -394,29 +394,44 @@ model PaymentProcessingException {
 }
 
 model AppointmentEvent {
-  id            String               @id @default(cuid())
-  appointmentId String
-  type          AppointmentEventType
-  details       Json?
-  createdAt     DateTime             @default(now())
-  appointment   Appointment          @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  id               String               @id @default(cuid())
+  appointmentId    String
+  type             AppointmentEventType
+  details          Json?
+  createdAt        DateTime             @default(now())
+  /// Administrator attribution (YASMIN-2B.1). Actor and operation are paired
+  /// for an administrator action and both null for system/customer events
+  /// (CHECK constraint in migration 20261018000000).
+  /// The acting AdminUser, derived from the server-side session, never from client input.
+  actorAdminUserId String?
+  /// Client-generated UUID for the action attempt; unique, so a retried
+  /// request can never apply the same action twice.
+  operationId      String?              @unique
+  /// The administrator's stated reason (1–500 characters). Required for
+  /// cancellation/rescheduling; null is permitted for completion/no-show.
+  reason           String?
+  appointment      Appointment          @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  actor            AdminUser?           @relation(fields: [actorAdminUserId], references: [id], onDelete: Restrict)
 
   @@index([appointmentId, createdAt])
+  @@index([actorAdminUserId])
 }
 
 model AdminUser {
-  id        String   @id @default(cuid())
-  email     String   @unique
+  id                String             @id @default(cuid())
+  email             String             @unique
   /// scrypt hash "scrypt$N$r$p$salt$key" (base64url); never plaintext. Null
   /// = no password set, so the admin cannot sign in. Set only by the
   /// provisioning script (scripts/admin-provision.ts).
   passwordHash      String?
   passwordUpdatedAt DateTime?
   /// Set = the admin cannot sign in and all their sessions are invalid.
-  disabledAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  sessions   AdminSession[]
+  disabledAt        DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  sessions          AdminSession[]
+  /// Appointment changes this administrator made (attribution; never deleted).
+  appointmentEvents AppointmentEvent[]
 }
 
 /// Database-backed admin session (YASMIN-2A). The browser holds an opaque

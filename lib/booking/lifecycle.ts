@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 
-import { appendAppointmentEvent, eventDetails } from "./appointment-events";
+import { appendAppointmentEvent, eventDetails, type AdminEventAttribution } from "./appointment-events";
 import {
   appointmentSelect,
   lockAppointment,
@@ -88,26 +88,39 @@ async function runLifecycleCommand(
   command: LifecycleCommand,
 ): Promise<AppointmentChange> {
   return prisma.$transaction(
-    async (tx) => {
-      const current = await lockAppointment(tx, appointmentId);
-      const decision = decideTransition(command, current.status);
-      if (decision.kind === "already-applied") {
-        return { appointment: toAppointmentView(current), changed: false };
-      }
-
-      const updated = await tx.appointment.update({
-        where: { id: appointmentId },
-        data: { status: decision.to },
-        select: appointmentSelect,
-      });
-      await appendAppointmentEvent(
-        tx,
-        appointmentId,
-        decision.event,
-        eventDetails.statusChanged(current.status, decision.to),
-      );
-      return { appointment: toAppointmentView(updated), changed: true };
-    },
+    async (tx) => applyLifecycleCommand(tx, await lockAppointment(tx, appointmentId), command),
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
   );
+}
+
+/**
+ * Applies `command` to an appointment whose row the caller has ALREADY locked
+ * in `tx` (`lockAppointment`), so callers can add their own checks under the
+ * same lock (the administrator action service does). Writes the status and
+ * exactly one event, or nothing when already in the target state.
+ */
+export async function applyLifecycleCommand(
+  tx: Prisma.TransactionClient,
+  current: Awaited<ReturnType<typeof lockAppointment>>,
+  command: LifecycleCommand,
+  attribution?: AdminEventAttribution,
+): Promise<AppointmentChange & { eventId: string | null }> {
+  const decision = decideTransition(command, current.status);
+  if (decision.kind === "already-applied") {
+    return { appointment: toAppointmentView(current), changed: false, eventId: null };
+  }
+
+  const updated = await tx.appointment.update({
+    where: { id: current.id },
+    data: { status: decision.to },
+    select: appointmentSelect,
+  });
+  const eventId = await appendAppointmentEvent(
+    tx,
+    current.id,
+    decision.event,
+    eventDetails.statusChanged(current.status, decision.to),
+    attribution,
+  );
+  return { appointment: toAppointmentView(updated), changed: true, eventId };
 }

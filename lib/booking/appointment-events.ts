@@ -441,26 +441,43 @@ export const eventDetails = {
 };
 
 /**
- * Appends an event inside the caller's transaction.
+ * Who performed an administrator action (YASMIN-2B.1). Stored in the
+ * event's own columns; actor and operation are always paired (CHECK
+ * constraint), never in `details`. Reasons are mandatory for cancellation
+ * and rescheduling, but may be null for explicit completion/no-show actions.
+ * The actor comes from the server-side admin session only.
+ */
+export type AdminEventAttribution = {
+  actorAdminUserId: string;
+  operationId: string;
+  reason: string | null;
+};
+
+/**
+ * Appends an event inside the caller's transaction and returns its id.
  *
  * Call only while holding the appointment's row lock (or, for CREATED, in the
  * transaction that inserts the appointment). See `eventTimestamp` for how the
- * timestamp is chosen.
+ * timestamp is chosen. `attribution` is set only for administrator actions.
  */
 export async function appendAppointmentEvent<T extends AppointmentEventType>(
   tx: Prisma.TransactionClient,
   appointmentId: string,
   type: T,
   details: AppointmentEventDetailsByType[T],
-): Promise<void> {
-  await tx.appointmentEvent.create({
+  attribution?: AdminEventAttribution,
+): Promise<string> {
+  const event = await tx.appointmentEvent.create({
     data: {
       appointmentId,
       type,
       details: details as unknown as Prisma.InputJsonObject,
       createdAt: await eventTimestamp(tx, appointmentId),
+      ...(attribution ?? {}),
     },
+    select: { id: true },
   });
+  return event.id;
 }
 
 /** How long we will wait for the database clock to pass the previous event. */
