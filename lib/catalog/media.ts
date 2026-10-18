@@ -56,6 +56,12 @@ type MediaMetadataFields = {
 
 export type AttachHairstyleImageInput = MediaMetadataFields;
 
+export type IdempotentImageAttachment = {
+  media: AdminMedia;
+  /** False only when a Blob completion callback is being retried. */
+  created: boolean;
+};
+
 export type AttachVerifiedHairstyleVideoInput = MediaMetadataFields & {
   /**
    * Measurement of the stored asset obtained server-side by media ingestion.
@@ -71,6 +77,11 @@ export type RemovedMediaMetadata = {
   storageKey: string;
   /** Always false: removing metadata never deletes the stored binary. */
   externalAssetDeleted: false;
+};
+
+export type UpdateHairstyleMediaMetadataInput = {
+  altText?: string | null;
+  caption?: string | null;
 };
 
 export async function listHairstyleMedia(hairstyleId: string): Promise<AdminMedia[]> {
@@ -99,6 +110,54 @@ export async function attachHairstyleImage(
   }
 
   return insertMediaWithinLimit("IMAGE", input);
+}
+
+/**
+ * Completion callbacks are retried by the provider. A repeated callback for
+ * the same stored object is safe, while reuse of that object by another
+ * hairstyle remains a catalog error.
+ */
+export async function attachHairstyleImageIdempotently(
+  input: AttachHairstyleImageInput,
+): Promise<IdempotentImageAttachment> {
+  const storageKey = normalizeStorageKey(input.storageKey);
+  const deliveryUrl = normalizeDeliveryUrl(input.deliveryUrl);
+
+  const existing = await prisma.hairstyleMedia.findUnique({
+    where: { storageKey },
+    select: adminMediaSelect,
+  });
+  if (existing) return existingImageAttachment(existing, input.hairstyleId, deliveryUrl);
+
+  try {
+    return { media: await attachHairstyleImage({ ...input, storageKey, deliveryUrl }), created: true };
+  } catch (error) {
+    if (!isUniqueViolationOn(error, "storageKey")) throw error;
+    const afterRace = await prisma.hairstyleMedia.findUnique({
+      where: { storageKey },
+      select: adminMediaSelect,
+    });
+    if (afterRace) return existingImageAttachment(afterRace, input.hairstyleId, deliveryUrl);
+    throw error;
+  }
+}
+
+function existingImageAttachment(
+  existing: AdminMedia,
+  hairstyleId: string,
+  deliveryUrl: string | null,
+): IdempotentImageAttachment {
+  if (
+    existing.hairstyleId === hairstyleId &&
+    existing.type === "IMAGE" &&
+    existing.deliveryUrl === deliveryUrl
+  ) {
+    return { media: existing, created: false };
+  }
+  throw new CatalogError(
+    "STORAGE_KEY_ALREADY_EXISTS",
+    `Stored asset "${existing.storageKey}" is already attached to a hairstyle.`,
+  );
 }
 
 /**
@@ -195,6 +254,38 @@ export async function reorderHairstyleMedia(
   });
 
   return listHairstyleMedia(hairstyleId);
+}
+
+/**
+ * Updates presentation metadata only. The parent lock proves media ownership
+ * and preserves the immutable object key, URL, type, and gallery position.
+ */
+export async function updateHairstyleMediaMetadata(
+  hairstyleId: string,
+  mediaId: string,
+  input: UpdateHairstyleMediaMetadataInput,
+): Promise<AdminMedia> {
+  const altText = normalizeOptionalText(input.altText);
+  const caption = normalizeOptionalText(input.caption);
+  if (altText === undefined && caption === undefined) {
+    throw new CatalogError("INVALID_MEDIA", "Provide alt text or a caption to update.");
+  }
+  return prisma.$transaction(async (tx) => {
+    await lockHairstyle(tx, hairstyleId);
+    const media = await tx.hairstyleMedia.findFirst({
+      where: { id: mediaId, hairstyleId },
+      select: { id: true },
+    });
+    if (!media) throw new CatalogError("MEDIA_NOT_FOUND", `Media ${mediaId} does not belong to this hairstyle.`);
+    return tx.hairstyleMedia.update({
+      where: { id: media.id },
+      data: {
+        ...(altText === undefined ? {} : { altText }),
+        ...(caption === undefined ? {} : { caption }),
+      },
+      select: adminMediaSelect,
+    });
+  });
 }
 
 /**

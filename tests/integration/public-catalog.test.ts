@@ -9,6 +9,7 @@ import {
   getPublicHairstyleBySlug,
   listPublicCategories,
   listPublicHairstyles,
+  reorderHairstyleMedia,
 } from "@/lib/catalog";
 
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
@@ -63,7 +64,7 @@ describe("public catalog visibility", { skip: integrationSkip }, () => {
       storageKey: "k/1.jpg",
       deliveryUrl: "https://cdn.example/k/1.jpg",
     });
-    await attachHairstyleImage({ hairstyleId: hairstyle.id, storageKey: "k/pending.jpg" });
+    const pending = await attachHairstyleImage({ hairstyleId: hairstyle.id, storageKey: "k/pending.jpg" });
     const second = await attachHairstyleImage({
       hairstyleId: hairstyle.id,
       storageKey: "k/2.jpg",
@@ -76,5 +77,9 @@ describe("public catalog visibility", { skip: integrationSkip }, () => {
 
     const [card] = await listPublicHairstyles();
     assert.equal(card.coverImage?.id, first.id);
+
+    await reorderHairstyleMedia(hairstyle.id, [second.id, first.id, pending.id]);
+    const [reorderedCard] = await listPublicHairstyles();
+    assert.equal(reorderedCard.coverImage?.id, second.id);
   });
 });

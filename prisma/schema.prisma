@@ -13,6 +13,19 @@ enum MediaType {
   VIDEO
 }
 
+/// Durable work for objects that must no longer be retained in Blob storage.
+/// It deliberately stores a pathname, not a provider credential or upload token.
+enum HairstyleMediaCleanupOperation {
+  DELETE_BLOB
+}
+
+enum HairstyleMediaCleanupState {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 enum AppointmentStatus {
   PENDING_PAYMENT
   CONFIRMED
@@ -149,23 +162,24 @@ model HairstyleCategory {
 }
 
 model Hairstyle {
-  id              String             @id @default(cuid())
-  categoryId      String
-  name            String
-  slug            String             @unique
-  description     String?
+  id                String                      @id @default(cuid())
+  categoryId        String
+  name              String
+  slug              String                      @unique
+  description       String?
   /// Null means a draft/unpriced simple style. Prices are integer USD cents.
-  priceCents      Int?
+  priceCents        Int?
   /// A variant-based style cannot be booked without an active variant.
-  requiresVariant Boolean            @default(false)
-  isActive        Boolean            @default(true)
-  sortOrder       Int                @default(0)
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  category        HairstyleCategory  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  media           HairstyleMedia[]
-  variants        HairstyleVariant[]
-  appointments    Appointment[]
+  requiresVariant   Boolean                     @default(false)
+  isActive          Boolean                     @default(true)
+  sortOrder         Int                         @default(0)
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+  category          HairstyleCategory           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  media             HairstyleMedia[]
+  mediaCleanupTasks HairstyleMediaCleanupTask[]
+  variants          HairstyleVariant[]
+  appointments      Appointment[]
 
   @@index([categoryId, isActive, sortOrder])
 }
@@ -201,6 +215,34 @@ model HairstyleMedia {
   hairstyle   Hairstyle @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
 
   @@index([hairstyleId, type, sortOrder])
+}
+
+/// An outbox for physical Blob deletion. Removing media metadata and adding
+/// this record happen in one PostgreSQL transaction, so a visible record is
+/// never left pointing to an object that was deleted first.
+model HairstyleMediaCleanupTask {
+  id            String                         @id @default(cuid())
+  hairstyleId   String
+  /// The deleted metadata id when this task was created by admin removal.
+  /// No foreign key: the HairstyleMedia row has intentionally been deleted.
+  sourceMediaId String?                        @unique
+  storageKey    String
+  operation     HairstyleMediaCleanupOperation @default(DELETE_BLOB)
+  state         HairstyleMediaCleanupState     @default(PENDING)
+  attemptCount  Int                            @default(0)
+  lastFailure   String?
+  nextAttemptAt DateTime                       @default(now())
+  leaseToken    String?
+  leasedAt      DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime                       @default(now())
+  updatedAt     DateTime                       @updatedAt
+  hairstyle     Hairstyle                      @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+
+  @@unique([storageKey, operation])
+  @@index([state, nextAttemptAt])
+  @@index([leasedAt])
+  @@index([hairstyleId])
 }
 
 model Appointment {

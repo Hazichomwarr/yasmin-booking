@@ -60,13 +60,16 @@ export {
 export {
   MEDIA_LIMITS,
   attachHairstyleImage,
+  attachHairstyleImageIdempotently,
   attachVerifiedHairstyleVideo,
   listHairstyleMedia,
   removeHairstyleMediaMetadata,
   reorderHairstyleMedia,
+  updateHairstyleMediaMetadata,
   type AttachHairstyleImageInput,
   type AttachVerifiedHairstyleVideoInput,
   type RemovedMediaMetadata,
+  type UpdateHairstyleMediaMetadataInput,
 } from "./media";
 
 export {

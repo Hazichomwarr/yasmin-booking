@@ -4,6 +4,10 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import {
+  PublicHairstyleCover,
+  type PublicHairstyleCoverImage,
+} from "@/components/catalog/PublicHairstyleCover";
 import { PUBLIC_BOOKING_LIMITS, publicContactProblems, type PublicContactField } from "@/lib/booking/public-booking-rules";
 
 import { apiError, dateLabel, money, postJson, timeLabel, zoneLabel } from "./booking-format";
@@ -15,7 +19,10 @@ type Availability = {
   pricing: { totalPriceCents: number; depositAmountCents: number; balanceDueCents: number };
 };
 type Details = { name: string; email: string; phone: string; preferredStylistName: string; hairstyleId: string; emailMarketingConsent: boolean; smsMarketingConsent: boolean };
-type Props = { hairstyles: Array<{ id: string; name: string }>; consentWording: { email: string; sms: string } };
+type Props = {
+  hairstyles: Array<{ id: string; name: string; coverImage: PublicHairstyleCoverImage | null }>;
+  consentWording: { email: string; sms: string };
+};
 
 const initialDetails: Details = { name: "", email: "", phone: "", preferredStylistName: "", hairstyleId: "", emailMarketingConsent: false, smsMarketingConsent: false };
 const FIELD_ORDER: PublicContactField[] = ["name", "email", "phone", "preferredStylistName"];
@@ -166,10 +173,24 @@ export function BookingExperience({ hairstyles, consentWording }: Props) {
             </label>
           ))}
           {hairstyles.length > 0 && <label>Hairstyle <em>(optional)</em>
-            <select value={details.hairstyleId} onChange={(e) => update({ hairstyleId: e.target.value })}>
-              <option value="">No preference</option>
-              {hairstyles.map((style) => <option key={style.id} value={style.id}>{style.name}</option>)}
-            </select>
+            <div className={styles.hairstyleChoice}>
+              <select value={details.hairstyleId} onChange={(e) => update({ hairstyleId: e.target.value })}>
+                <option value="">No preference</option>
+                {hairstyles.map((style) => <option key={style.id} value={style.id}>{style.name}</option>)}
+              </select>
+              {details.hairstyleId && (() => {
+                const style = hairstyles.find((item) => item.id === details.hairstyleId);
+                if (!style) return null;
+                return (
+                  <div className={styles.hairstylePreview}>
+                    <div className={styles.hairstylePreviewImage}>
+                      <PublicHairstyleCover image={style.coverImage} hairstyleName={style.name} sizes="88px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} />
+                    </div>
+                    <span>{style.name}</span>
+                  </div>
+                );
+              })()}
+            </div>
           </label>}
           <label>Preferred stylist <em>(optional)</em>
             <input ref={(element) => { fields.current.preferredStylistName = element; }} value={details.preferredStylistName} onChange={(e) => update({ preferredStylistName: e.target.value })} maxLength={PUBLIC_BOOKING_LIMITS.preferredStylistName} {...errorFor("preferredStylistName")} />

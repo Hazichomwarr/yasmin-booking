@@ -5,12 +5,19 @@ import { BookingUnavailable } from "@/components/booking/BookingUnavailable";
 import { listPublicHairstyles } from "@/lib/catalog";
 import { CURRENT_MARKETING_CONSENT_WORDING } from "@/lib/customers/marketing-consent";
 import { isPublicBookingEnabled } from "@/lib/http/config";
+import { isApprovedBlobDeliveryUrl } from "@/lib/media/blob-public-origin";
 
 export default async function BookPage() {
   // Request time only: the flag and the catalog are never baked in at build.
   await connection();
   if (!isPublicBookingEnabled(process.env)) return <BookingUnavailable />;
-  const hairstyles = (await listPublicHairstyles()).map(({ id, name }) => ({ id, name }));
+  const hairstyles = (await listPublicHairstyles()).map(({ id, name, coverImage }) => ({
+    id,
+    name,
+    coverImage: coverImage && isApprovedBlobDeliveryUrl(coverImage.deliveryUrl, process.env.BLOB_PUBLIC_BASE_URL)
+      ? coverImage
+      : null,
+  }));
   return (
     <BookingExperience
       hairstyles={hairstyles}

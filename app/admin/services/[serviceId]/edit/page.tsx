@@ -34,6 +34,7 @@ export default async function EditAdminServicePage({
             isActive: service.isActive,
             sortOrder: service.sortOrder,
             variants: service.variants,
+            media: service.media,
           }}
         />
       </section>

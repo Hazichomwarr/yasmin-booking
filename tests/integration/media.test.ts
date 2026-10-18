@@ -11,6 +11,7 @@ import {
   listHairstyleMedia,
   removeHairstyleMediaMetadata,
   reorderHairstyleMedia,
+  updateHairstyleMediaMetadata,
   type AttachHairstyleImageInput,
 } from "@/lib/catalog";
 import { prisma } from "@/lib/prisma";
@@ -56,6 +57,25 @@ describe("hairstyle media metadata", { skip: integrationSkip }, () => {
     assert.equal(media.deliveryUrl, "https://cdn.example/1.jpg");
     assert.equal(media.altText, "Waist-length knotless braids");
     assert.equal(media.caption, null);
+  });
+
+  it("updates only parent-scoped display metadata without changing object identity or ordering", async () => {
+    const hairstyle = await newHairstyle("metadata");
+    const other = await newHairstyle("other-metadata");
+    const media = await attachHairstyleImage({
+      hairstyleId: hairstyle.id,
+      storageKey: "styles/metadata/1.jpg",
+      deliveryUrl: "https://cdn.example/metadata.jpg",
+    });
+    const updated = await updateHairstyleMediaMetadata(hairstyle.id, media.id, {
+      altText: "  Knotless braids profile  ",
+      caption: "  Summer style  ",
+    });
+    assert.deepEqual(
+      [updated.storageKey, updated.deliveryUrl, updated.sortOrder, updated.altText, updated.caption],
+      ["styles/metadata/1.jpg", "https://cdn.example/metadata.jpg", 0, "Knotless braids profile", "Summer style"],
+    );
+    await assertCatalogError(updateHairstyleMediaMetadata(other.id, media.id, { altText: "Nope" }), "MEDIA_NOT_FOUND");
   });
 
   it("rejects media for a missing hairstyle or blank storage key", async () => {

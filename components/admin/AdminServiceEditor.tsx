@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { AdminServicePhotoGallery, type ServicePhoto } from "./AdminServicePhotoGallery";
 import styles from "./Admin.module.css";
 
 export type ServiceEditorCategory = { id: string; name: string };
@@ -26,6 +27,7 @@ export type ServiceEditorValue = {
   isActive: boolean;
   sortOrder: number;
   variants: ServiceEditorVariant[];
+  media: ServicePhoto[];
 };
 
 type DraftVariant = {
@@ -276,6 +278,7 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
     {fieldErrors.variants ? <p className={styles.fieldError} role="alert">{fieldErrors.variants}</p> : null}
     <fieldset className={styles.serviceState} disabled={saving}><legend>Publishing</legend><label><input type="radio" checked={!isActive} onChange={() => { if (service?.isActive) setDeactivationTarget({ type: "service" }); else setIsActive(false); }} /> Draft — save without making it bookable</label><label><input type="radio" checked={isActive} onChange={() => setIsActive(true)} /> Active — available for booking when its category is active</label></fieldset>
     <section className={styles.categoryInline} aria-label="Create category"><button className={styles.inlineButton} type="button" onClick={() => setShowCategory((visible) => !visible)} disabled={saving || creatingCategory}>{showCategory ? "Cancel new category" : "Create a category"}</button>{showCategory ? <div className={styles.categoryInlineFields}><label className={styles.actionLabel}>New category name<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} maxLength={120} disabled={creatingCategory} /></label><button className={styles.secondary} type="button" onClick={createCategory} disabled={creatingCategory}>{creatingCategory ? "Creating…" : "Add category"}</button></div> : null}</section>
+    {editing ? <AdminServicePhotoGallery key={service!.media.map((media) => `${media.id}:${media.sortOrder}:${media.deliveryUrl}:${media.altText}:${media.caption}`).join("|")} serviceId={service!.id} media={service!.media} /> : null}
     <div className={styles.actionRow}><button className={styles.primary} type="submit" disabled={saving || Boolean(partialCreationId)}>{submitLabel}</button><Link className={styles.secondary} href="/admin/services" aria-disabled={saving}>Cancel</Link></div>
     {deactivationTarget ? <DeactivationDialog target={deactivationTarget} onCancel={() => setDeactivationTarget(null)} onConfirm={() => { if (deactivationTarget.type === "service") setIsActive(false); else if (deactivationTarget.remove) { const selected = variants.find((variant) => variant.key === deactivationTarget.key); if (selected?.id) setRemovedVariantIds((current) => [...current, selected.id!]); setVariants((current) => current.filter((variant) => variant.key !== deactivationTarget.key)); } else updateVariant(deactivationTarget.key, "isActive", false); setDeactivationTarget(null); }} /> : null}
   </form>;
