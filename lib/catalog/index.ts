@@ -38,6 +38,7 @@ export {
   listHairstylesForAdmin,
   moveHairstyleToCategory,
   reorderHairstylesInCategory,
+  setHairstyleSortOrder,
   updateHairstyle,
   type CreateHairstyleInput,
   type UpdateHairstyleInput,
@@ -51,6 +52,7 @@ export {
   reorderHairstyleVariants,
   setHairstyleVariantActive,
   updateHairstyleVariant,
+  updateHairstyleVariantForHairstyle,
   type CreateHairstyleVariantInput,
   type UpdateHairstyleVariantInput,
 } from "./variants";

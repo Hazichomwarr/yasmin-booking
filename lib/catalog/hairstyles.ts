@@ -35,7 +35,8 @@ import {
  *
  * Ordering: hairstyles are ordered within their category. Creating a hairstyle
  * or moving it to another category appends it to the end of that category.
- * `reorderHairstylesInCategory` is the only way to change sortOrder.
+ * `reorderHairstylesInCategory` and `setHairstyleSortOrder` preserve a dense,
+ * deterministic order when a curator changes a display position.
  *
  * Concurrency: operations that compute a position inside a category first lock
  * that category row (SELECT ... FOR UPDATE), so concurrent creates/moves/
@@ -62,6 +63,8 @@ export type UpdateHairstyleInput = {
   categoryId?: string;
   priceCents?: number | null;
   requiresVariant?: boolean;
+  /** A style can be active only when its resulting pricing configuration is bookable. */
+  isActive?: boolean;
 };
 
 export async function listHairstylesForAdmin(
@@ -136,6 +139,7 @@ export async function updateHairstyle(
     description: normalizeOptionalText(input.description),
     priceCents: input.priceCents === undefined ? undefined : normalizeOptionalPriceCents(input.priceCents),
     requiresVariant: input.requiresVariant,
+    isActive: input.isActive,
   };
 
   try {
@@ -143,10 +147,24 @@ export async function updateHairstyle(
       if (data.requiresVariant === true && data.priceCents !== undefined && data.priceCents !== null) {
         throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
       }
-      const current = await prisma.hairstyle.findUnique({ where: { id: hairstyleId }, select: { requiresVariant: true, priceCents: true } });
+      const current = await prisma.hairstyle.findUnique({
+        where: { id: hairstyleId },
+        select: {
+          requiresVariant: true,
+          priceCents: true,
+          isActive: true,
+          variants: { where: { isActive: true, priceCents: { not: null } }, select: { id: true }, take: 1 },
+        },
+      });
       if (!current) throw hairstyleNotFound(hairstyleId);
-      if ((data.requiresVariant ?? current.requiresVariant) && (data.priceCents === undefined ? current.priceCents : data.priceCents) !== null) {
+      const requiresVariant = data.requiresVariant ?? current.requiresVariant;
+      const priceCents = data.priceCents === undefined ? current.priceCents : data.priceCents;
+      const isActive = data.isActive ?? current.isActive;
+      if (requiresVariant && priceCents !== null) {
         throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
+      }
+      if (isActive && ((!requiresVariant && priceCents === null) || (requiresVariant && current.variants.length === 0))) {
+        throw new CatalogError("INVALID_PRICE", "A service must have an active price before it can be published.");
       }
       const row = await prisma.hairstyle.update({
         where: { id: hairstyleId },
@@ -160,9 +178,25 @@ export async function updateHairstyle(
     const row = await prisma.$transaction(async (tx) => {
       const current = await tx.hairstyle.findUnique({
         where: { id: hairstyleId },
-        select: { categoryId: true },
+        select: {
+          categoryId: true,
+          requiresVariant: true,
+          priceCents: true,
+          isActive: true,
+          variants: { where: { isActive: true, priceCents: { not: null } }, select: { id: true }, take: 1 },
+        },
       });
       if (!current) throw hairstyleNotFound(hairstyleId);
+
+      const requiresVariant = data.requiresVariant ?? current.requiresVariant;
+      const priceCents = data.priceCents === undefined ? current.priceCents : data.priceCents;
+      const isActive = data.isActive ?? current.isActive;
+      if (requiresVariant && priceCents !== null) {
+        throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
+      }
+      if (isActive && ((!requiresVariant && priceCents === null) || (requiresVariant && current.variants.length === 0))) {
+        throw new CatalogError("INVALID_PRICE", "A service must have an active price before it can be published.");
+      }
 
       const placement =
         current.categoryId === destinationCategoryId
@@ -239,11 +273,67 @@ export async function reorderHairstylesInCategory(
   return listHairstylesForAdmin({ categoryId });
 }
 
+/**
+ * Moves one hairstyle to a zero-based position within its current category.
+ * The complete sibling list is rewritten while the category lock is held, so
+ * no duplicate or skipped ordering is exposed to concurrent catalog edits.
+ */
+export async function setHairstyleSortOrder(
+  hairstyleId: string,
+  requestedSortOrder: number,
+): Promise<AdminHairstyle> {
+  if (!Number.isSafeInteger(requestedSortOrder) || requestedSortOrder < 0) {
+    throw new CatalogError("INVALID_REORDER", "Display order must be a non-negative whole number.");
+  }
+
+  const row = await prisma.$transaction(async (tx) => {
+    const current = await tx.hairstyle.findUnique({
+      where: { id: hairstyleId },
+      select: { id: true, categoryId: true },
+    });
+    if (!current) throw hairstyleNotFound(hairstyleId);
+
+    await lockCategory(tx, current.categoryId);
+    const siblings = await tx.hairstyle.findMany({
+      where: { categoryId: current.categoryId },
+      select: { id: true, sortOrder: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    });
+    const orderedIds = siblings.map((style) => style.id);
+    const currentIndex = orderedIds.indexOf(hairstyleId);
+    orderedIds.splice(currentIndex, 1);
+    orderedIds.splice(Math.min(requestedSortOrder, orderedIds.length), 0, hairstyleId);
+
+    const previous = new Map(siblings.map((style) => [style.id, style.sortOrder]));
+    for (const [sortOrder, id] of orderedIds.entries()) {
+      if (previous.get(id) !== sortOrder) {
+        await tx.hairstyle.update({ where: { id }, data: { sortOrder } });
+      }
+    }
+
+    return tx.hairstyle.findUniqueOrThrow({
+      where: { id: hairstyleId },
+      select: adminHairstyleSelect,
+    });
+  });
+  return toAdminHairstyle(row);
+}
+
 async function setHairstyleActive(
   hairstyleId: string,
   isActive: boolean,
 ): Promise<AdminHairstyle> {
   try {
+    if (isActive) {
+      const current = await prisma.hairstyle.findUnique({
+        where: { id: hairstyleId },
+        select: { requiresVariant: true, priceCents: true, variants: { where: { isActive: true, priceCents: { not: null } }, select: { id: true }, take: 1 } },
+      });
+      if (!current) throw hairstyleNotFound(hairstyleId);
+      if ((!current.requiresVariant && current.priceCents === null) || (current.requiresVariant && current.variants.length === 0)) {
+        throw new CatalogError("INVALID_PRICE", "A service must have an active price before it can be published.");
+      }
+    }
     const row = await prisma.hairstyle.update({
       where: { id: hairstyleId },
       data: { isActive },

@@ -4,11 +4,12 @@ import type { ReactNode } from "react";
 import { AdminLogoutButton } from "./AdminLogoutButton";
 import styles from "./Admin.module.css";
 
-export function AdminShell({ current, email, children }: { current: "dashboard" | "appointments"; email: string; children: ReactNode }) {
+export function AdminShell({ current, email, children }: { current: "dashboard" | "appointments" | "services"; email: string; children: ReactNode }) {
   const navigation = (
     <>
       <Link href="/admin" aria-current={current === "dashboard" ? "page" : undefined}>Dashboard</Link>
       <Link href="/admin/appointments" aria-current={current === "appointments" ? "page" : undefined}>Appointments</Link>
+      <Link href="/admin/services" aria-current={current === "services" ? "page" : undefined}>Services</Link>
     </>
   );
 

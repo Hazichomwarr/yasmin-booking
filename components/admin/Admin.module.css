@@ -298,6 +298,53 @@
 
 .filterActions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 
+.catalogHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 18px; }
+.catalogHeading .title { margin-bottom: 0; }
+.catalogHeading .primary { display: inline-flex; align-items: center; text-decoration: none; }
+.catalogList { display: grid; gap: 12px; }
+.catalogCard { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 18px; padding: 18px; border: 1px solid #eedfd8; border-radius: 16px; background: #fffdfa; box-shadow: 0 8px 28px rgba(91, 42, 48, 0.05); }
+.catalogCard h2 { margin: 2px 0 6px; font: 1.25rem/1.2 Georgia, serif; }
+.catalogCategory { margin: 0; color: #c52f60; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; }
+.catalogActions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.catalogActions .secondary { display: inline-flex; align-items: center; text-decoration: none; }
+.badge[data-catalog-state="active"] { background: #e6f4ea; color: #1e6b34; }
+.badge[data-catalog-state="draft"] { background: #fff4dc; color: #8a5a00; }
+.badge[data-catalog-state="inactive"] { background: #f1f0f0; color: #5d5a5b; }
+
+.formIntro { margin: 0 0 22px; color: #766b6e; line-height: 1.5; }
+.serviceForm { display: grid; gap: 18px; }
+.serviceFormGrid { display: grid; gap: 14px; }
+.serviceForm .actionLabel { margin: 0; }
+.serviceForm select { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid #decac5; border-radius: 10px; background: #fff; color: inherit; font: inherit; }
+.fieldHint { color: #766b6e; font-size: 0.78rem; font-weight: 400; }
+.required { color: #a91f4d; font-size: 0.74rem; font-weight: 700; }
+.fieldError { display: block; color: #9f1c44; font-size: 0.8rem; font-weight: 700; line-height: 1.35; }
+.recovery { margin: 0; padding: 12px; border: 1px solid #d9a045; border-radius: 10px; background: #fff8e8; color: #655136; font-weight: 700; }
+.recovery a { color: #8a5a00; text-decoration: underline; text-underline-offset: 3px; }
+.serviceState { display: grid; gap: 10px; margin: 0; padding: 16px; border: 1px solid #eedfd8; border-radius: 12px; }
+.serviceState legend { padding: 0 4px; color: #46383c; font-size: 0.9rem; font-weight: 700; }
+.serviceState label { display: flex; align-items: flex-start; gap: 9px; color: #65585c; font-size: 0.9rem; line-height: 1.4; }
+.serviceState input { margin-top: 0.16rem; accent-color: #c52f60; }
+.pricingMode { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 0; padding: 16px; border: 1px solid #eedfd8; border-radius: 12px; }
+.pricingMode legend { width: 100%; padding: 0 4px; color: #46383c; font-size: 0.9rem; font-weight: 700; }
+.pricingMode label { display: flex; align-items: center; gap: 8px; color: #65585c; font-size: 0.9rem; }
+.pricingMode input { accent-color: #c52f60; }
+.pricingMode p { width: 100%; margin: 0; }
+.variantEditor { display: grid; gap: 14px; padding: 18px; border: 1px solid #eedfd8; border-radius: 14px; background: #fffaf8; }
+.variantHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.variantHeading h2 { margin: 0; font: 1.25rem/1.2 Georgia, serif; }
+.variantHeading p { margin: 5px 0 0; color: #766b6e; font-size: 0.86rem; }
+.variantList { display: grid; gap: 10px; }
+.variantRow { display: grid; gap: 10px; padding: 14px; border: 1px solid #eedfd8; border-radius: 12px; background: #fff; }
+.variantRow .actionLabel { margin: 0; }
+.variantActive { display: flex; align-items: center; gap: 8px; min-height: 44px; color: #65585c; font-size: 0.9rem; font-weight: 700; }
+.variantActive input { accent-color: #c52f60; }
+.categoryInline { display: grid; gap: 12px; padding-top: 2px; }
+.inlineButton { justify-self: start; padding: 0; border: 0; background: transparent; color: #a91f4d; cursor: pointer; font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.categoryInlineFields { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 14px; border: 1px solid #eedfd8; border-radius: 12px; background: #fff7f5; }
+.categoryInlineFields .actionLabel { flex: 1 1 220px; }
+.categoryInlineFields .secondary { flex: 0 0 auto; }
+
 .primary,
 .navButton {
   min-height: 44px;
@@ -432,6 +479,8 @@
   .counts { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .previewGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .filters { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; }
+  .serviceFormGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .variantRow { grid-template-columns: minmax(12rem, 1.5fr) minmax(8rem, 1fr) minmax(6rem, 0.55fr) auto auto; align-items: end; }
   .details { grid-template-columns: minmax(10rem, max-content) minmax(0, 1fr); gap: 10px 24px; }
   .details dd { margin: 0; }
 }

@@ -5,7 +5,6 @@ import {
   createCategory,
   createHairstyle,
   createHairstyleVariant,
-  deactivateHairstyleVariant,
   updateHairstyle,
   updateHairstyleVariant,
 } from "@/lib/catalog";
@@ -46,8 +45,7 @@ describe("catalog pricing", { skip: integrationSkip }, () => {
     const bob = await createHairstyle({ categoryId: category.id, name: "Bob", slug: "bob", requiresVariant: true });
     const draft = await createHairstyle({ categoryId: category.id, name: "Boho", slug: "boho" });
     const crochet = await createHairstyle({ categoryId: category.id, name: "Crochet", slug: "crochet", priceCents: 16_000 });
-    const inactive = await createHairstyleVariant({ hairstyleId: bob.id, name: "Gypsy", priceCents: 26_000 });
-    await deactivateHairstyleVariant(inactive.id);
+    const inactive = await createHairstyleVariant({ hairstyleId: bob.id, name: "Gypsy", priceCents: 26_000, isActive: false });
     for (const selection of [
       { hairstyleId: bob.id },
       { hairstyleId: bob.id, hairstyleVariantId: inactive.id },

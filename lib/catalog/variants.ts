@@ -18,6 +18,7 @@ export type CreateHairstyleVariantInput = {
 export type UpdateHairstyleVariantInput = {
   name?: string;
   priceCents?: number | null;
+  isActive?: boolean;
 };
 
 export async function listHairstyleVariantsForAdmin(hairstyleId: string): Promise<AdminHairstyleVariant[]> {
@@ -32,12 +33,14 @@ export async function listHairstyleVariantsForAdmin(hairstyleId: string): Promis
 export async function createHairstyleVariant(input: CreateHairstyleVariantInput): Promise<AdminHairstyleVariant> {
   const name = normalizeName(input.name, "Variant name");
   const priceCents = normalizeOptionalPriceCents(input.priceCents);
+  const isActive = input.isActive ?? true;
+  assertActiveVariantPrice(priceCents, isActive);
   try {
     return await prisma.$transaction(async (tx) => {
       await lockHairstyle(tx, input.hairstyleId);
       const last = await tx.hairstyleVariant.aggregate({ where: { hairstyleId: input.hairstyleId }, _max: { sortOrder: true } });
       return tx.hairstyleVariant.create({
-        data: { hairstyleId: input.hairstyleId, name, priceCents, isActive: input.isActive ?? true, sortOrder: (last._max.sortOrder ?? -1) + 1 },
+        data: { hairstyleId: input.hairstyleId, name, priceCents, isActive, sortOrder: (last._max.sortOrder ?? -1) + 1 },
         select: adminHairstyleVariantSelect,
       });
     });
@@ -51,8 +54,30 @@ export async function updateHairstyleVariant(variantId: string, input: UpdateHai
   const data = {
     name: input.name === undefined ? undefined : normalizeName(input.name, "Variant name"),
     priceCents: input.priceCents === undefined ? undefined : normalizeOptionalPriceCents(input.priceCents),
+    isActive: input.isActive,
   };
   try {
+    const current = await prisma.hairstyleVariant.findUnique({
+      where: { id: variantId },
+      select: {
+        hairstyleId: true,
+        priceCents: true,
+        isActive: true,
+        hairstyle: { select: { isActive: true, requiresVariant: true } },
+      },
+    });
+    if (!current) throw variantNotFound(variantId);
+    const nextPriceCents = data.priceCents === undefined ? current.priceCents : data.priceCents;
+    const nextIsActive = data.isActive ?? current.isActive;
+    assertActiveVariantPrice(nextPriceCents, nextIsActive);
+    if (current.hairstyle.isActive && current.hairstyle.requiresVariant && current.isActive && !nextIsActive) {
+      const otherActiveCount = await prisma.hairstyleVariant.count({
+        where: { hairstyleId: current.hairstyleId, id: { not: variantId }, isActive: true, priceCents: { not: null } },
+      });
+      if (otherActiveCount === 0) {
+        throw new CatalogError("INVALID_PRICE", "Deactivate the service before removing its last active priced variant.");
+      }
+    }
     return await prisma.hairstyleVariant.update({ where: { id: variantId }, data, select: adminHairstyleVariantSelect });
   } catch (error) {
     if (isRecordNotFound(error)) throw variantNotFound(variantId);
@@ -62,16 +87,28 @@ export async function updateHairstyleVariant(variantId: string, input: UpdateHai
 }
 
 export async function setHairstyleVariantActive(variantId: string, isActive: boolean): Promise<AdminHairstyleVariant> {
-  try {
-    return await prisma.hairstyleVariant.update({ where: { id: variantId }, data: { isActive }, select: adminHairstyleVariantSelect });
-  } catch (error) {
-    if (isRecordNotFound(error)) throw variantNotFound(variantId);
-    throw error;
-  }
+  return updateHairstyleVariant(variantId, { isActive });
 }
 
 export function activateHairstyleVariant(variantId: string) { return setHairstyleVariantActive(variantId, true); }
 export function deactivateHairstyleVariant(variantId: string) { return setHairstyleVariantActive(variantId, false); }
+
+/**
+ * Ensures a route scoped to one hairstyle cannot mutate a variant belonging
+ * to another hairstyle.
+ */
+export async function updateHairstyleVariantForHairstyle(
+  hairstyleId: string,
+  variantId: string,
+  input: UpdateHairstyleVariantInput,
+): Promise<AdminHairstyleVariant> {
+  const variant = await prisma.hairstyleVariant.findFirst({
+    where: { id: variantId, hairstyleId },
+    select: { id: true },
+  });
+  if (!variant) throw variantNotFound(variantId);
+  return updateHairstyleVariant(variantId, input);
+}
 
 export async function reorderHairstyleVariants(hairstyleId: string, orderedVariantIds: string[]): Promise<AdminHairstyleVariant[]> {
   await prisma.$transaction(async (tx) => {
@@ -98,3 +135,9 @@ async function lockHairstyle(tx: Prisma.TransactionClient, hairstyleId: string) 
 }
 
 function variantNotFound(variantId: string) { return new CatalogError("VARIANT_NOT_FOUND", `Hairstyle variant ${variantId} does not exist.`); }
+
+function assertActiveVariantPrice(priceCents: number | null, isActive: boolean) {
+  if (isActive && (priceCents === null || priceCents < 4_000)) {
+    throw new CatalogError("INVALID_PRICE", "An active variant needs a price of at least $40.00.");
+  }
+}
