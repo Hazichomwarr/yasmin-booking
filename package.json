@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "tsx scripts/local-development-server.ts",
+    "dev:admin": "tsx scripts/local-development-admin-provision.ts",
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",

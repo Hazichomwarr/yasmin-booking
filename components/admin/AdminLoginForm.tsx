@@ -4,6 +4,7 @@ import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import styles from "./Admin.module.css";
+import { requestAdminLogin } from "./login-request";
 
 export function AdminLoginForm() {
   const router = useRouter();
@@ -17,24 +18,29 @@ export function AdminLoginForm() {
     const form = new FormData(event.currentTarget);
     setBusy(true);
     setError("");
+    let shouldFocusError = false;
     try {
-      const response = await fetch("/api/admin/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: String(form.get("email") ?? ""), password: String(form.get("password") ?? "") }),
+      const result = await requestAdminLogin({
+        email: String(form.get("email") ?? ""),
+        password: String(form.get("password") ?? ""),
       });
-      if (response.ok) {
+      if (result.ok) {
         router.replace("/admin");
         router.refresh();
         return;
       }
-      const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-      setError(body?.error?.message ?? "Sign-in failed. Please try again.");
+      setError(result.message);
+      shouldFocusError = true;
     } catch {
-      setError("We could not reach the server. Check your connection and try again.");
+      // Covers a client-side router failure after a successful response.
+      setError("We signed you in, but could not open the admin workspace. Please try again.");
+      shouldFocusError = true;
+    } finally {
+      // Next navigation is asynchronous. A failed or interrupted transition
+      // must never strand this form in its disabled loading state.
+      setBusy(false);
+      if (shouldFocusError) requestAnimationFrame(() => alertRef.current?.focus());
     }
-    setBusy(false);
-    requestAnimationFrame(() => alertRef.current?.focus());
   }
 
   return (

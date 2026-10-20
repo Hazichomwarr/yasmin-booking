@@ -2,12 +2,12 @@
  * Administrator provisioning CLI (YASMIN-2A). The only supported way to
  * create an admin or set a password; there is no registration route.
  *
- *   pnpm admin:provision --email owner@example.com --confirm-target <host>/<database>
+ *   pnpm admin:provision --email owner@example.com --confirm-target <host>:<port>/<database>
  *   pnpm admin:provision --email owner@example.com --disable --confirm-target …
  *   pnpm admin:provision --email owner@example.com --enable  --confirm-target …
  *
  * - The target is DATABASE_URL (process environment first, then .env). It
- *   is printed as "<endpoint>/<database>" only — never credentials — and
+ *   is printed as "<host>:<port>/<database>" only — never credentials — and
  *   the command refuses to connect unless --confirm-target matches it
  *   exactly. Run without --confirm-target to see the target.
  * - The password is read from a hidden prompt (twice), or from stdin with
@@ -29,7 +29,7 @@ function targetOf(url: string | undefined): string | null {
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    return `${parsed.hostname.split(".")[0].replace(/-pooler$/, "")}/${parsed.pathname.replace(/^\//, "")}`;
+    return `${parsed.hostname}:${parsed.port || "5432"}/${parsed.pathname.replace(/^\//, "")}`;
   } catch {
     return null;
   }
