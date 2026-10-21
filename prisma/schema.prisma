@@ -61,6 +61,13 @@ enum ConfirmationEmailState {
   FAILED
 }
 
+/// The independently retried transactional notification recipients for one
+/// confirmed appointment. Neither kind is marketing communication.
+enum ConfirmationEmailKind {
+  CUSTOMER_CONFIRMATION
+  OWNER_NEW_BOOKING
+}
+
 /// Why a received charge has not been allocated to its appointment.
 enum PaymentReconciliationReason {
   /// Capacity full or booking policy closed when the place was re-checked.
@@ -292,7 +299,7 @@ model Appointment {
   hairstyleVariant             HairstyleVariant?         @relation(fields: [hairstyleVariantId], references: [id], onDelete: Restrict)
   payments                     Payment[]
   events                       AppointmentEvent[]
-  confirmationEmail            BookingConfirmationEmail?
+  confirmationEmails           BookingConfirmationEmail[]
 
   @@index([appointmentDate, status])
   @@index([locationId, appointmentDate, bookingSlotId])
@@ -301,13 +308,17 @@ model Appointment {
   @@index([hairstyleVariantId])
 }
 
-/// Durable post-commit confirmation email intent. One confirmed appointment
-/// can produce one delivery record; provider work is never part of payment
-/// fulfillment's database transaction.
+/// Durable post-commit transactional notification intent. A confirmed
+/// appointment produces one independently retried row for each recipient;
+/// provider work is never part of payment fulfillment's database transaction.
 model BookingConfirmationEmail {
   id                String                 @id @default(cuid())
-  appointmentId     String                 @unique
-  recipientEmail    String
+  appointmentId     String
+  /// Customer rows persist their recipient snapshot. Owner rows resolve the
+  /// server-only configured recipient at delivery time, so configuration is
+  /// never copied into booking data or a client response.
+  recipientEmail    String?
+  kind              ConfirmationEmailKind  @default(CUSTOMER_CONFIRMATION)
   state             ConfirmationEmailState @default(PENDING)
   attemptCount      Int                    @default(0)
   lastAttemptAt     DateTime?
@@ -318,6 +329,7 @@ model BookingConfirmationEmail {
   updatedAt         DateTime               @updatedAt
   appointment       Appointment            @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
 
+  @@unique([appointmentId, kind])
   @@index([state, createdAt])
 }
 

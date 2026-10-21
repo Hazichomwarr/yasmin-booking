@@ -118,7 +118,7 @@ describe("catalog hairstyles", { skip: integrationSkip }, () => {
 
   it("activates and deactivates", async () => {
     const category = await braidsCategory();
-    const hairstyle = await createHairstyle({ categoryId: category.id, name: "Knotless", slug: "knotless" });
+    const hairstyle = await createHairstyle({ categoryId: category.id, name: "Knotless", slug: "knotless", priceCents: 20_000 });
 
     const deactivated = await deactivateHairstyle(hairstyle.id);
     assert.equal(deactivated.isActive, false);

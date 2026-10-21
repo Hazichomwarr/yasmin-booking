@@ -177,7 +177,7 @@ export async function updateHairstyle(
         // catalog record. Enforce publication pricing when the request
         // explicitly publishes or changes pricing configuration.
         const changesPricing = data.priceCents !== undefined || data.requiresVariant !== undefined;
-        if ((data.isActive === true || (current.isActive && changesPricing)) &&
+        if ((data.isActive === true || (isActive && changesPricing)) &&
           ((!requiresVariant && priceCents === null) || (requiresVariant && current.variants.length === 0))) {
           throw new CatalogError("INVALID_PRICE", "A service must have an active price before it can be published.");
         }
@@ -216,7 +216,7 @@ export async function updateHairstyle(
         throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
       }
       const changesPricing = data.priceCents !== undefined || data.requiresVariant !== undefined;
-      if ((data.isActive === true || (current.isActive && changesPricing)) &&
+      if ((data.isActive === true || (isActive && changesPricing)) &&
         ((!requiresVariant && priceCents === null) || (requiresVariant && current.variants.length === 0))) {
         throw new CatalogError("INVALID_PRICE", "A service must have an active price before it can be published.");
       }

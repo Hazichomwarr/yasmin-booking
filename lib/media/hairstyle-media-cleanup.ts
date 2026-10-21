@@ -13,7 +13,18 @@ export const CLEANUP_LEASE_MS = 10 * 60_000;
 export const CLEANUP_MAX_ATTEMPTS = 5;
 export const CLEANUP_BATCH_LIMIT = 10;
 
-export type MediaCleanupSummary = { completed: number; failed: number; exhausted: number; skipped: number };
+/**
+ * Safe operational counts only: no storage path, media, appointment, or
+ * customer information is emitted. `exhausted` requires operator attention;
+ * `failed` is retryable and has been deferred to `nextAttemptAt`.
+ */
+export type MediaCleanupSummary = {
+  processed: number;
+  completed: number;
+  failed: number;
+  exhausted: number;
+  skipped: number;
+};
 
 type RemoveResult = { mediaId: string; hairstyleId: string; storageKey: string; alreadyRemoved: boolean };
 
@@ -81,7 +92,7 @@ export async function runHairstyleMediaCleanup(
     afterClaim?: (task: Pick<HairstyleMediaCleanupTask, "id" | "storageKey" | "leaseToken">) => Promise<void>;
   } = {},
 ): Promise<MediaCleanupSummary> {
-  const summary: MediaCleanupSummary = { completed: 0, failed: 0, exhausted: 0, skipped: 0 };
+  const summary: MediaCleanupSummary = { processed: 0, completed: 0, failed: 0, exhausted: 0, skipped: 0 };
   const blob = options.blob ?? vercelBlobClientGateway;
   const now = options.now ?? databaseNow;
   const config = loadBlobStorageConfig(process.env);
@@ -90,7 +101,12 @@ export async function runHairstyleMediaCleanup(
   for (let count = 0; count < (options.limit ?? CLEANUP_BATCH_LIMIT); count += 1) {
     const claimed = await claimNextTask(await now());
     if (!claimed) break;
+    summary.processed += 1;
     await options.afterClaim?.(claimed);
+
+    // A takeover may have happened while a slow worker was paused. Never let
+    // a stale lease call the provider, much less finalise the newer attempt.
+    if (!await stillOwnsClaim(claimed.id, claimed.leaseToken!)) continue;
 
     // A callback may have attached this Blob during its grace window. This
     // check happens after the lease claim, immediately before any provider call.
@@ -102,6 +118,9 @@ export async function runHairstyleMediaCleanup(
       if (await completeClaim(claimed.id, claimed.leaseToken!, await now())) summary.skipped += 1;
       continue;
     }
+
+    // Keep the ownership check adjacent to the irreversible provider call.
+    if (!await stillOwnsClaim(claimed.id, claimed.leaseToken!)) continue;
 
     try {
       await blob.delete(blobUrl(config.publicBaseUrl, claimed.storageKey), config.token);
@@ -166,6 +185,12 @@ async function completeClaim(id: string, leaseToken: string, now: Date): Promise
     data: { state: "COMPLETED", leaseToken: null, leasedAt: null, completedAt: now, lastFailure: null },
   });
   return complete.count === 1;
+}
+
+async function stillOwnsClaim(id: string, leaseToken: string): Promise<boolean> {
+  return (await prisma.hairstyleMediaCleanupTask.count({
+    where: { id, state: "PROCESSING", leaseToken },
+  })) === 1;
 }
 
 async function lockHairstyle(tx: Prisma.TransactionClient, hairstyleId: string) {

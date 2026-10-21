@@ -9,7 +9,7 @@ import { createPublicBooking } from "@/lib/booking/public-booking";
 import { prisma } from "@/lib/prisma";
 import type { StripeCheckoutAdapter } from "@/lib/stripe/checkout";
 
-import { WEEK, createCustomer, createLocation, insertAppointment, publicBookingPlace, upcomingPublicBookingDate } from "../support/booking-fixtures";
+import { WEEK, createBookablePublicHairstyle, createCustomer, createLocation, insertAppointment, publicBookingPlace, upcomingPublicBookingDate } from "../support/booking-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
 /**
@@ -76,6 +76,7 @@ function evidenceFor(payment: { id: string; amountCents: number }, appointmentId
 
 async function publicBooking() {
   const { location, slot } = await publicBookingPlace();
+  const hairstyle = await createBookablePublicHairstyle();
   return createPublicBooking({
     name: "Outcome Customer",
     email: "outcome@example.test",
@@ -83,6 +84,7 @@ async function publicBooking() {
     locationId: location.id,
     bookingSlotId: slot.id,
     appointmentDate: upcomingPublicBookingDate(),
+    hairstyleId: hairstyle.id,
   });
 }
 

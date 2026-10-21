@@ -1,12 +1,14 @@
-import type { BookingConfirmationEmail } from "@prisma/client";
+import type { BookingConfirmationEmail, ConfirmationEmailKind } from "@prisma/client";
 
 import { formatSalonAddress } from "@/lib/booking/location-address";
+import { PUBLIC_EMAIL_PATTERN } from "@/lib/booking/public-booking-rules";
 import { prisma } from "@/lib/prisma";
 
 /**
  * Booking confirmation email outbox (YASMIN-1G).
  *
- * Payment fulfillment writes one BookingConfirmationEmail row in the same
+ * Payment fulfillment writes independent customer and owner notification rows
+ * in the same
  * transaction that confirms the appointment; nothing here runs inside it, so
  * fulfillment never depends on email. This worker delivers rows afterwards.
  *
@@ -35,6 +37,7 @@ export const SENDING_LEASE_MS = 10 * 60_000;
 export const PROVIDER_TIMEOUT_MS = 10_000;
 
 export type ConfirmationMessage = { to: string; subject: string; text: string };
+type Env = Readonly<Record<string, string | undefined>>;
 
 export type ConfirmationEmailAdapter = {
   send(message: ConfirmationMessage, options: { idempotencyKey: string }): Promise<{ id: string }>;
@@ -45,6 +48,14 @@ export class ConfirmationEmailDeliveryError extends Error {
   constructor(readonly kind: "rejected" | "outcome-unknown") {
     super(`Confirmation email delivery failed (${kind}).`);
     this.name = "ConfirmationEmailDeliveryError";
+  }
+}
+
+/** A server configuration problem, never a customer-address or provider error. */
+export class ConfirmationEmailConfigurationError extends Error {
+  constructor(readonly code: "owner-recipient-not-configured") {
+    super("Salon notification recipient is not configured.");
+    this.name = "ConfirmationEmailConfigurationError";
   }
 }
 
@@ -76,8 +87,8 @@ export function resendConfirmationEmailAdapter(): ConfirmationEmailAdapter {
 }
 
 /** The same key for every attempt of one outbox row. Not a secret; no customer data. */
-export function confirmationIdempotencyKey(row: Pick<BookingConfirmationEmail, "id">): string {
-  return `booking-confirmation/${row.id}`;
+export function confirmationIdempotencyKey(row: Pick<BookingConfirmationEmail, "id" | "kind">): string {
+  return `booking-notification/${row.kind.toLowerCase()}/${row.id}`;
 }
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -87,21 +98,81 @@ const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
  * so retries send an identical payload (required by the idempotency key).
  * Never includes tokens, links, identifiers or payment-provider details.
  */
-export function confirmationMessage(row: { recipientEmail: string; appointment: {
-  locationNameSnapshot: string; appointmentDate: Date; slotTimeSnapshot: string; hairstyleNameSnapshot: string | null;
-  totalPriceCents: number; depositAmountCents: number; balanceDueCents: number;
-  location: { addressLine1: string | null; addressLine2: string | null; city: string | null; state: string | null; postalCode: string | null; phone: string | null };
-} }): ConfirmationMessage {
+type NotificationRow = {
+  appointmentId: string;
+  recipientEmail: string | null;
+  kind?: ConfirmationEmailKind;
+  appointment: {
+    locationNameSnapshot: string;
+    appointmentDate: Date;
+    slotTimeSnapshot: string;
+    hairstyleNameSnapshot: string | null;
+    hairstyleVariantNameSnapshot: string | null;
+    totalPriceCents: number;
+    depositAmountCents: number;
+    balanceDueCents: number;
+    customer: { name: string; email: string; phone: string };
+    location: {
+      addressLine1: string | null;
+      addressLine2: string | null;
+      city: string | null;
+      state: string | null;
+      postalCode: string | null;
+      phone: string | null;
+    };
+  };
+};
+
+/** Exact server-only owner-recipient validation; never falls back to customer data. */
+export function salonNotificationRecipient(env: Env = process.env): string {
+  const email = env.SALON_NOTIFICATION_EMAIL?.trim().toLowerCase() ?? "";
+  if (!email || email.length > 254 || !PUBLIC_EMAIL_PATTERN.test(email)) {
+    throw new ConfirmationEmailConfigurationError("owner-recipient-not-configured");
+  }
+  return email;
+}
+
+/** Stable non-secret reference for staff and customer correspondence. */
+export function bookingReference(appointmentId: string): string {
+  return `YB-${appointmentId.slice(-8).toUpperCase()}`;
+}
+
+export function confirmationMessage(row: NotificationRow, env: Env = process.env): ConfirmationMessage {
   const { appointment } = row;
   const { location } = appointment;
   const address = formatSalonAddress(location);
+  const style = [appointment.hairstyleNameSnapshot, appointment.hairstyleVariantNameSnapshot].filter(Boolean).join(" — ");
+  const reference = bookingReference(row.appointmentId);
+  const schedule = `${appointment.locationNameSnapshot} · ${appointment.appointmentDate.toISOString().slice(0, 10)} at ${appointment.slotTimeSnapshot} ET`;
+
+  if (row.kind === "OWNER_NEW_BOOKING") {
+    return {
+      to: salonNotificationRecipient(env),
+      subject: `New booking confirmed · ${reference}`,
+      text: [
+        "New confirmed appointment.",
+        `Booking reference: ${reference}`,
+        `Customer: ${appointment.customer.name}`,
+        `Email: ${appointment.customer.email}`,
+        `Phone: ${appointment.customer.phone}`,
+        schedule,
+        style && `Style: ${style}`,
+        `Total: ${money(appointment.totalPriceCents)}`,
+        `Deposit paid: ${money(appointment.depositAmountCents)}`,
+        `Balance due at salon: ${money(appointment.balanceDueCents)}`,
+      ].filter(Boolean).join("\n"),
+    };
+  }
+
+  if (!row.recipientEmail) throw new ConfirmationEmailConfigurationError("owner-recipient-not-configured");
   return {
     to: row.recipientEmail,
     subject: "Your Yasmin's Beauty Salon appointment is confirmed",
     text: [
       "Your appointment is confirmed.",
-      `${appointment.locationNameSnapshot} · ${appointment.appointmentDate.toISOString().slice(0, 10)} at ${appointment.slotTimeSnapshot}`,
-      appointment.hairstyleNameSnapshot && `Style: ${appointment.hairstyleNameSnapshot}`,
+      `Booking reference: ${reference}`,
+      schedule,
+      style && `Style: ${style}`,
       address && `Location: ${address}`,
       `Total: ${money(appointment.totalPriceCents)}`,
       `Deposit paid: ${money(appointment.depositAmountCents)} (nonrefundable)`,
@@ -119,7 +190,7 @@ export type DeliveryRunSummary = { sent: number; failed: number; exhausted: numb
  */
 export async function deliverPendingConfirmationEmails(
   adapter: ConfirmationEmailAdapter,
-  options: { limit?: number; afterClaim?: (rowId: string) => Promise<void> } = {},
+  options: { limit?: number; afterClaim?: (rowId: string) => Promise<void>; env?: () => Env } = {},
 ): Promise<DeliveryRunSummary> {
   const summary: DeliveryRunSummary = { sent: 0, failed: 0, exhausted: 0 };
   const now = await databaseNow();
@@ -133,7 +204,7 @@ export async function deliverPendingConfirmationEmails(
     },
     take: options.limit ?? 10,
     orderBy: { createdAt: "asc" },
-    include: { appointment: { include: { location: true } } },
+    include: { appointment: { include: { location: true, customer: true } } },
   });
 
   for (const row of due) {
@@ -154,11 +225,13 @@ export async function deliverPendingConfirmationEmails(
 
     const mine = { id: row.id, state: "SENDING" as const, attemptCount: attempt };
     try {
-      const sent = await adapter.send(confirmationMessage(row), { idempotencyKey: confirmationIdempotencyKey(row) });
+      const sent = await adapter.send(confirmationMessage(row, options.env?.() ?? process.env), { idempotencyKey: confirmationIdempotencyKey(row) });
       const done = await prisma.bookingConfirmationEmail.updateMany({ where: mine, data: { state: "SENT", sentAt: await databaseNow(), providerMessageId: sent.id, lastError: null } });
       if (done.count === 1) summary.sent += 1;
     } catch (error) {
-      const kind = error instanceof ConfirmationEmailDeliveryError ? error.kind : "outcome-unknown";
+      const kind = error instanceof ConfirmationEmailConfigurationError
+        ? error.code
+        : error instanceof ConfirmationEmailDeliveryError ? error.kind : "outcome-unknown";
       const terminal = attempt >= MAX_ATTEMPTS;
       const done = await prisma.bookingConfirmationEmail.updateMany({
         where: mine,

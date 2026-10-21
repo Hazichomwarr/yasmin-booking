@@ -376,11 +376,18 @@ async function fulfill(
     });
     await appendAppointmentEvent(tx, appointment.id, event.type, event.details);
     const customer = await tx.customer.findUniqueOrThrow({ where: { id: appointment.customerId }, select: { email: true } });
-    // The delivery intent commits with PAYMENT_CONFIRMED; sending happens only
-    // afterwards, from the outbox worker. Unique appointmentId keeps it to one
-    // intent, and skipDuplicates means an existing row can never roll back a
-    // verified confirmation: fulfillment never depends on email.
-    await tx.bookingConfirmationEmail.createMany({ data: [{ appointmentId: appointment.id, recipientEmail: customer.email }], skipDuplicates: true });
+    // Both durable notification intents commit with PAYMENT_CONFIRMED; sending
+    // happens only afterwards, from the outbox worker. The composite unique
+    // key makes each recipient kind idempotent across replayed webhooks. The
+    // owner recipient is intentionally resolved only by the server worker
+    // from SALON_NOTIFICATION_EMAIL, never copied into appointment data.
+    await tx.bookingConfirmationEmail.createMany({
+      data: [
+        { appointmentId: appointment.id, kind: "CUSTOMER_CONFIRMATION", recipientEmail: customer.email },
+        { appointmentId: appointment.id, kind: "OWNER_NEW_BOOKING" },
+      ],
+      skipDuplicates: true,
+    });
     return { kind: "confirmed", ...link, method: decision.method, allocatedAt: decidedAt, decidedAt };
   }
 

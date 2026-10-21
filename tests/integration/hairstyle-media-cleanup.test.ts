@@ -4,7 +4,12 @@ import { after, before, describe, it } from "node:test";
 import { signInAdmin } from "@/lib/admin/auth";
 import { ADMIN_COOKIE_NAME } from "@/lib/admin/session-cookie";
 import { provisionAdminPassword } from "@/lib/admin/provision";
-import { attachHairstyleImage, createCategory, createHairstyle } from "@/lib/catalog";
+import {
+  attachHairstyleImage,
+  createCategory,
+  createHairstyle,
+  createHairstyleVariant,
+} from "@/lib/catalog";
 import { removeHairstyleImageApi } from "@/lib/http/admin-hairstyle-media-removal-api";
 import {
   CLEANUP_LEASE_MS,
@@ -120,19 +125,19 @@ describe("hairstyle media durable cleanup", { skip: integrationSkip }, () => {
     await removeHairstyleImageApi(request(first.id, one.id, await adminToken()), first.id, one.id);
     await removeHairstyleImageApi(request(first.id, two.id, await adminToken()), first.id, two.id);
     const missing = fakeBlob("missing");
-    assert.deepEqual(await runHairstyleMediaCleanup({ blob: missing.gateway }), { completed: 2, failed: 0, exhausted: 0, skipped: 0 });
+    assert.deepEqual(await runHairstyleMediaCleanup({ blob: missing.gateway }), { processed: 2, completed: 2, failed: 0, exhausted: 0, skipped: 0 });
     assert.equal(missing.calls(), 2);
     assert.equal(await prisma.hairstyleMediaCleanupTask.count({ where: { state: "COMPLETED" } }), 2);
 
     const third = await attachHairstyleImage({ hairstyleId: first.id, storageKey: "hairstyles/worker/retry.jpg" });
     await removeHairstyleImageApi(request(first.id, third.id, await adminToken()), first.id, third.id);
     const failed = fakeBlob("fails");
-    assert.deepEqual(await runHairstyleMediaCleanup({ blob: failed.gateway }), { completed: 0, failed: 1, exhausted: 0, skipped: 0 });
+    assert.deepEqual(await runHairstyleMediaCleanup({ blob: failed.gateway }), { processed: 1, completed: 0, failed: 1, exhausted: 0, skipped: 0 });
     const task = await prisma.hairstyleMediaCleanupTask.findUniqueOrThrow({ where: { storageKey_operation: { storageKey: third.storageKey, operation: "DELETE_BLOB" } } });
     assert.equal(task.state, "PENDING");
     await prisma.hairstyleMediaCleanupTask.update({ where: { id: task.id }, data: { nextAttemptAt: new Date(0) } });
     const success = fakeBlob();
-    assert.deepEqual(await runHairstyleMediaCleanup({ blob: success.gateway }), { completed: 1, failed: 0, exhausted: 0, skipped: 0 });
+    assert.deepEqual(await runHairstyleMediaCleanup({ blob: success.gateway }), { processed: 1, completed: 1, failed: 0, exhausted: 0, skipped: 0 });
   });
 
   it("fences concurrent workers and never deletes a subsequently attached object", async () => {
@@ -154,6 +159,55 @@ describe("hairstyle media durable cleanup", { skip: integrationSkip }, () => {
     const result = await runHairstyleMediaCleanup({ blob: protectedBlob.gateway });
     assert.equal(result.skipped, 1);
     assert.equal(protectedBlob.calls(), 0);
+  });
+
+  it("fences a stale lease before provider deletion and cleans variant-gallery media like service media", async () => {
+    const first = await style("Stale");
+    const variant = await createHairstyleVariant({ hairstyleId: first.id, name: "Variant", priceCents: 20_000 });
+    const media = await attachHairstyleImage({
+      hairstyleId: first.id,
+      hairstyleVariantId: variant.id,
+      storageKey: "hairstyles/stale/variant.jpg",
+    });
+    await removeHairstyleImageAndQueueCleanup(first.id, media.id);
+
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    let claimed!: () => void;
+    const claimedReady = new Promise<void>((resolve) => { claimed = resolve; });
+    const staleBlob = fakeBlob();
+    const staleRun = runHairstyleMediaCleanup({
+      blob: staleBlob.gateway,
+      limit: 1,
+      afterClaim: async () => {
+        claimed();
+        await paused;
+      },
+    });
+    await claimedReady;
+
+    const task = await prisma.hairstyleMediaCleanupTask.findUniqueOrThrow({
+      where: { storageKey_operation: { storageKey: media.storageKey, operation: "DELETE_BLOB" } },
+    });
+    await prisma.hairstyleMediaCleanupTask.update({
+      where: { id: task.id },
+      data: { leasedAt: new Date(Date.now() - CLEANUP_LEASE_MS - 1_000) },
+    });
+
+    const freshBlob = fakeBlob();
+    assert.deepEqual(
+      await runHairstyleMediaCleanup({ blob: freshBlob.gateway, limit: 1 }),
+      { processed: 1, completed: 1, failed: 0, exhausted: 0, skipped: 0 },
+    );
+    release();
+    assert.deepEqual(
+      await staleRun,
+      { processed: 1, completed: 0, failed: 0, exhausted: 0, skipped: 0 },
+    );
+    assert.equal(staleBlob.calls(), 0);
+    assert.equal(freshBlob.calls(), 1);
+    const completed = await prisma.hairstyleMediaCleanupTask.findUniqueOrThrow({ where: { id: task.id } });
+    assert.deepEqual([completed.state, completed.attemptCount, completed.leaseToken], ["COMPLETED", 2, null]);
   });
 
   it("persists failed-upload reconciliation with a grace period", async () => {

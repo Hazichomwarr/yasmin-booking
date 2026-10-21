@@ -9,11 +9,12 @@ import {
 import { createPublicBooking } from "@/lib/booking/public-booking";
 import { prisma } from "@/lib/prisma";
 
-import { createCustomer, publicBookingPlace, upcomingPublicBookingDate, withFailingWrites } from "../support/booking-fixtures";
+import { createBookablePublicHairstyle, createCustomer, publicBookingPlace, upcomingPublicBookingDate, withFailingWrites } from "../support/booking-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
 async function booking(consent: { emailMarketingConsent?: boolean; smsMarketingConsent?: boolean }) {
   const { location, slot } = await publicBookingPlace();
+  const hairstyle = await createBookablePublicHairstyle();
   const created = await createPublicBooking({
     name: "Consent Customer",
     email: "consent@example.test",
@@ -21,6 +22,7 @@ async function booking(consent: { emailMarketingConsent?: boolean; smsMarketingC
     locationId: location.id,
     bookingSlotId: slot.id,
     appointmentDate: upcomingPublicBookingDate(),
+    hairstyleId: hairstyle.id,
     ...consent,
   });
   const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: created.booking.appointmentId }, select: { customerId: true } });
@@ -72,6 +74,7 @@ describe("marketing-consent evidence", { skip: integrationSkip }, () => {
 
   it("rolls consent back with a failed booking", async () => {
     const { location, slot } = await publicBookingPlace();
+    const hairstyle = await createBookablePublicHairstyle();
     await withFailingWrites("AppointmentEvent", "INSERT", () =>
       assert.rejects(
         createPublicBooking({
@@ -81,6 +84,7 @@ describe("marketing-consent evidence", { skip: integrationSkip }, () => {
           locationId: location.id,
           bookingSlotId: slot.id,
           appointmentDate: upcomingPublicBookingDate(),
+          hairstyleId: hairstyle.id,
           emailMarketingConsent: true,
         }),
       ),

@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
-    { "path": "/api/cron/confirmation-emails", "schedule": "0 14 * * *" }
+    { "path": "/api/cron/confirmation-emails", "schedule": "0 14 * * *" },
+    { "path": "/api/cron/hairstyle-media-cleanup", "schedule": "20 5 * * *" }
   ]
 }

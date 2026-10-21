@@ -37,6 +37,7 @@ export function upcomingPublicBookingDate(now = new Date()): string {
 }
 
 let publicSlotSequence = 0;
+let publicHairstyleSequence = 0;
 
 /**
  * A slot at THE online location for public-booking tests. V1 public booking
@@ -53,6 +54,23 @@ export async function publicBookingPlace(options: { capacity?: number; name?: st
     data: { locationId: location.id, localStartTime: new Date(`1970-01-01T${time}:00.000Z`), capacity: options.capacity ?? 10 },
   });
   return { location, slot };
+}
+
+/** Creates one active, priced service for public-booking test inputs. */
+export async function createBookablePublicHairstyle(priceCents = 20_000) {
+  publicHairstyleSequence += 1;
+  const suffix = publicHairstyleSequence;
+  const category = await prisma.hairstyleCategory.create({
+    data: { name: `Public category ${suffix}`, slug: `public-category-${suffix}` },
+  });
+  return prisma.hairstyle.create({
+    data: {
+      categoryId: category.id,
+      name: `Public style ${suffix}`,
+      slug: `public-style-${suffix}`,
+      priceCents,
+    },
+  });
 }
 
 export const seconds = (n: number) => n * 1000;

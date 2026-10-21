@@ -20,7 +20,13 @@ import { integrationSkip, useCleanTestDatabase } from "../support/integration-da
 const SECRET = "c".repeat(48);
 const URL = "https://book.yasmin.example/api/cron/confirmation-emails";
 
-function cron(adapter: ReturnType<typeof provider> | (() => never), env: Record<string, string | undefined> = { CRON_SECRET: SECRET }) {
+function cron(
+  adapter: ReturnType<typeof provider> | (() => never),
+  env: Record<string, string | undefined> = {
+    CRON_SECRET: SECRET,
+    SALON_NOTIFICATION_EMAIL: "yasmin@example.test",
+  },
+) {
   const logs: CronLogEntry[] = [];
   const deps: ConfirmationEmailCronDeps = {
     env: () => env,
@@ -44,7 +50,7 @@ describe("confirmation email cron endpoint (YASMIN-1G)", { skip: integrationSkip
     assert.equal("POST" in cronRoute, false);
     assert.equal(cronRoute.maxDuration, CRON_MAX_DURATION_SECONDS);
     const config = JSON.parse(readFileSync("vercel.json", "utf8")) as { crons: Array<{ path: string; schedule: string }> };
-    assert.deepEqual(config.crons.map((job) => job.path), ["/api/cron/confirmation-emails"]);
+    assert.deepEqual(config.crons.map((job) => job.path), ["/api/cron/confirmation-emails", "/api/cron/hairstyle-media-cleanup"]);
     // Hobby accepts at most one run per day: fixed minute and hour, every day.
     assert.match(config.crons[0].schedule, /^\d{1,2} \d{1,2} \* \* \*$/);
   });
@@ -179,8 +185,8 @@ describe("confirmation email cron endpoint (YASMIN-1G)", { skip: integrationSkip
     await Promise.all([deliverWebhook(booking, "evt_cron_a"), deliverWebhook(booking, "evt_cron_a"), call(), deliverWebhook(booking, "evt_cron_b"), call()]);
     await deliverWebhook(booking, "evt_cron_c");
     await call();
-    assert.equal(await prisma.bookingConfirmationEmail.count({ where: { appointmentId: booking.appointmentId } }), 1);
-    assert.equal(sent.calls.length, 1);
+    assert.equal(await prisma.bookingConfirmationEmail.count({ where: { appointmentId: booking.appointmentId } }), 2);
+    assert.equal(sent.calls.length, 2);
     assert.equal((await outbox(booking.appointmentId)).state, "SENT");
   });
 

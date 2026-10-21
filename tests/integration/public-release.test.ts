@@ -20,6 +20,20 @@ let sequence = 0;
 async function book(options: { consent?: boolean; capacity?: number } = {}) {
   sequence += 1;
   const { location, slot } = await publicBookingPlace({ capacity: options.capacity });
+  const category = await prisma.hairstyleCategory.create({
+    data: {
+      name: `Release category ${sequence}`,
+      slug: `release-category-${sequence}`,
+    },
+  });
+  const hairstyle = await prisma.hairstyle.create({
+    data: {
+      categoryId: category.id,
+      name: `Release style ${sequence}`,
+      slug: `release-style-${sequence}`,
+      priceCents: 20_000,
+    },
+  });
   const created = await createPublicBooking({
     name: `Release Customer ${sequence}`,
     email: `release${sequence}@example.test`,
@@ -27,6 +41,7 @@ async function book(options: { consent?: boolean; capacity?: number } = {}) {
     locationId: location.id,
     bookingSlotId: slot.id,
     appointmentDate: upcomingPublicBookingDate(),
+    hairstyleId: hairstyle.id,
     emailMarketingConsent: options.consent ?? false,
   });
   return { token: created.accessToken, appointmentId: created.booking.appointmentId, slot, date: created.booking.appointmentDate };
@@ -198,7 +213,7 @@ describe("safe unpaid release (YASMIN-1G)", { skip: integrationSkip }, () => {
     const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: booking.appointmentId } });
     assert.equal(appointment.status, "CONFIRMED");
     assert.equal(appointment.accessTokenRevokedAt, null);
-    assert.equal(await prisma.bookingConfirmationEmail.count({ where: { appointmentId: booking.appointmentId } }), 1);
+    assert.equal(await prisma.bookingConfirmationEmail.count({ where: { appointmentId: booking.appointmentId } }), 2);
   });
 
   it("never releases around a Checkout recovery lease racing with it", async () => {

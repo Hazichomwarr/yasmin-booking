@@ -28,7 +28,7 @@ describe("confirmation email outbox (YASMIN-1G)", { skip: integrationSkip }, () 
     assert.equal(await prisma.bookingConfirmationEmail.count(), 0);
   });
 
-  it("records exactly one PENDING intent with the confirmation, independent of marketing consent", async () => {
+  it("records a customer PENDING intent with the confirmation, independent of marketing consent", async () => {
     const booking = await confirmedBooking({ consent: false });
     const row = await outbox(booking.appointmentId);
     assert.equal(row.state, "PENDING");
@@ -42,12 +42,12 @@ describe("confirmation email outbox (YASMIN-1G)", { skip: integrationSkip }, () 
     assert.equal(sent.calls[0].message.to, booking.email);
   });
 
-  it("keeps one intent across duplicate, concurrent and re-sent webhook deliveries", async () => {
+  it("keeps one intent per recipient across duplicate, concurrent and re-sent webhook deliveries", async () => {
     const booking = await pendingPublicBooking();
     await Promise.all([deliverWebhook(booking, "evt_outbox_dup"), deliverWebhook(booking, "evt_outbox_dup"), deliverWebhook(booking, "evt_outbox_other")]);
     assert.equal((await deliverWebhook(booking, "evt_outbox_dup")).kind, "duplicate");
     await deliverWebhook(booking, "evt_outbox_third");
-    assert.equal(await prisma.bookingConfirmationEmail.count({ where: { appointmentId: booking.appointmentId } }), 1);
+    assert.equal(await prisma.bookingConfirmationEmail.count({ where: { appointmentId: booking.appointmentId } }), 2);
   });
 
   it("never lets an existing outbox row block or roll back webhook fulfillment", async () => {
@@ -55,7 +55,7 @@ describe("confirmation email outbox (YASMIN-1G)", { skip: integrationSkip }, () 
     await prisma.bookingConfirmationEmail.create({ data: { appointmentId: booking.appointmentId, recipientEmail: "stale@example.test", state: "SENT" } });
     assert.equal((await deliverWebhook(booking)).kind, "processed");
     assert.equal((await prisma.appointment.findUniqueOrThrow({ where: { id: booking.appointmentId } })).status, "CONFIRMED");
-    assert.equal(await prisma.bookingConfirmationEmail.count(), 1);
+    assert.equal(await prisma.bookingConfirmationEmail.count(), 2);
   });
 
   it("lets only one of two concurrent workers claim a message", async () => {
@@ -168,7 +168,7 @@ describe("confirmation email outbox (YASMIN-1G)", { skip: integrationSkip }, () 
     }
     assert.match(message.text, /Deposit paid: \$40\.00 \(nonrefundable\)/);
     assert.match(message.text, /Balance due after service: \$160\.00/);
-    assert.match(idempotencyKey, /^booking-confirmation\/[a-z0-9]+$/);
+    assert.match(idempotencyKey, /^booking-notification\/customer_confirmation\/[a-z0-9]+$/);
     const row = await outbox(booking.appointmentId);
     assert.equal(row.lastError, null);
   });

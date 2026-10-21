@@ -5,6 +5,8 @@ import type Stripe from "stripe";
 import { startAuthorizedBookingCheckout } from "@/lib/booking/checkout";
 import { createPublicBooking } from "@/lib/booking/public-booking";
 import { processSignedStripeWebhookEvent } from "@/lib/booking/stripe-webhook";
+import type { ConfirmationEmailKind } from "@prisma/client";
+
 import { SENDING_LEASE_MS, type ConfirmationEmailAdapter, type ConfirmationMessage } from "@/lib/email/confirmation";
 import { prisma } from "@/lib/prisma";
 import type { StripeCheckoutAdapter } from "@/lib/stripe/checkout";
@@ -44,9 +46,21 @@ let sequence = 0;
 export async function pendingPublicBooking(options: { consent?: boolean } = {}) {
   sequence += 1;
   const { location, slot } = await publicBookingPlace();
+  const category = await prisma.hairstyleCategory.create({
+    data: { name: `Outbox category ${sequence}`, slug: `outbox-category-${sequence}` },
+  });
+  const hairstyle = await prisma.hairstyle.create({
+    data: {
+      categoryId: category.id,
+      name: `Outbox style ${sequence}`,
+      slug: `outbox-style-${sequence}`,
+      priceCents: 20_000,
+    },
+  });
   const created = await createPublicBooking({
     name: `Outbox Customer ${sequence}`, email: `outbox${sequence}@example.test`, phone: `+1 555 050 ${String(sequence).padStart(4, "0")}`,
     locationId: location.id, bookingSlotId: slot.id, appointmentDate: upcomingPublicBookingDate(),
+    hairstyleId: hairstyle.id,
     emailMarketingConsent: options.consent ?? false, smsMarketingConsent: options.consent ?? false,
   });
   assert.equal((await startAuthorizedBookingCheckout(created.accessToken, { adapter: checkoutAdapter })).kind, "ready");
@@ -57,9 +71,19 @@ export async function pendingPublicBooking(options: { consent?: boolean } = {}) 
 export const deliverWebhook = (booking: Awaited<ReturnType<typeof pendingPublicBooking>>, eventId = `evt_outbox_${booking.payment.id}`, paymentStatus: "paid" | "unpaid" = "paid", status: "complete" | "expired" = "complete") =>
   processSignedStripeWebhookEvent({ id: eventId, type: status === "expired" ? "checkout.session.expired" : "checkout.session.completed", data: { object: { id: booking.payment.providerCheckoutSessionId! } } }, gateway(booking.payment, paymentStatus, status));
 
-export async function confirmedBooking(options: { consent?: boolean } = {}) {
+/**
+ * Legacy confirmation-worker fixtures retain only the customer job unless a
+ * test explicitly requests both recipients. Dedicated owner tests use
+ * keepOwner so old customer delivery scenarios remain focused on one lease.
+ */
+export async function confirmedBooking(options: { consent?: boolean; keepOwner?: boolean } = {}) {
   const booking = await pendingPublicBooking(options);
   assert.equal((await deliverWebhook(booking)).kind, "processed");
+  if (!options.keepOwner) {
+    await prisma.bookingConfirmationEmail.delete({
+      where: { appointmentId_kind: { appointmentId: booking.appointmentId, kind: "OWNER_NEW_BOOKING" } },
+    });
+  }
   return booking;
 }
 
@@ -69,6 +93,7 @@ export function provider(behaviour: (call: Call, n: number) => Promise<{ id: str
   return { calls, async send(message, { idempotencyKey }) { calls.push({ message, idempotencyKey }); return behaviour({ message, idempotencyKey }, calls.length); } };
 }
 
-export const outbox = (appointmentId: string) => prisma.bookingConfirmationEmail.findUniqueOrThrow({ where: { appointmentId } });
-export const ageLease = (appointmentId: string, extraMs = 1_000) => databaseNow().then((now) =>
-  prisma.bookingConfirmationEmail.update({ where: { appointmentId }, data: { lastAttemptAt: new Date(now.getTime() - SENDING_LEASE_MS - extraMs) } }));
+export const outbox = (appointmentId: string, kind: ConfirmationEmailKind = "CUSTOMER_CONFIRMATION") =>
+  prisma.bookingConfirmationEmail.findUniqueOrThrow({ where: { appointmentId_kind: { appointmentId, kind } } });
+export const ageLease = (appointmentId: string, extraMs = 1_000, kind: ConfirmationEmailKind = "CUSTOMER_CONFIRMATION") => databaseNow().then((now) =>
+  prisma.bookingConfirmationEmail.update({ where: { appointmentId_kind: { appointmentId, kind } }, data: { lastAttemptAt: new Date(now.getTime() - SENDING_LEASE_MS - extraMs) } }));

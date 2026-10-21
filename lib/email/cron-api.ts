@@ -66,7 +66,7 @@ export function createConfirmationEmailCronApi(deps: ConfirmationEmailCronDeps =
     }
 
     try {
-      const summary = await deps.deliver(adapter, { limit: CRON_BATCH_LIMIT });
+      const summary = await deps.deliver(adapter, { limit: CRON_BATCH_LIMIT, env: deps.env });
       deps.log({ trigger: "cron", status: 200, outcome: "ran", summary });
       return json(200, summary);
     } catch (error) {
@@ -85,7 +85,7 @@ export async function deliverConfirmationEmailsAfterWebhook(deps: ConfirmationEm
     return deps.log({ trigger: "webhook", outcome: "email-not-configured" });
   }
   try {
-    const summary = await deps.deliver(adapter, { limit: CRON_BATCH_LIMIT });
+    const summary = await deps.deliver(adapter, { limit: CRON_BATCH_LIMIT, env: deps.env });
     deps.log({ trigger: "webhook", outcome: "ran", summary });
   } catch (error) {
     deps.log({ trigger: "webhook", outcome: error instanceof Error ? error.name : "failed" });

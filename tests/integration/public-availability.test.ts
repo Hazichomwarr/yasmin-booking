@@ -9,7 +9,7 @@ import { createPublicBooking } from "@/lib/booking/public-booking";
 import { createPublicBookingApi, defaultPublicBookingApiDeps } from "@/lib/http/public-booking-api";
 import { prisma } from "@/lib/prisma";
 
-import { createCustomer, createLocation, fillSlot, insertAppointment, publicBookingPlace } from "../support/booking-fixtures";
+import { createBookablePublicHairstyle, createCustomer, createLocation, fillSlot, insertAppointment, publicBookingPlace } from "../support/booking-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 import { databaseNow } from "../support/payment-fixtures";
 
@@ -19,9 +19,10 @@ const NOW = new Date("2027-03-01T15:00:00.000Z");
 const isCode = (code: string) => (error: unknown) => error instanceof BookingError && error.code === code;
 
 let contact = 0;
-function input(location: { id: string }, slot: { id: string }, appointmentDate: string) {
+async function input(location: { id: string }, slot: { id: string }, appointmentDate: string) {
   contact += 1;
-  return { name: `Window Customer ${contact}`, email: `window${contact}@example.test`, phone: `+1 555 030 ${String(contact).padStart(4, "0")}`, locationId: location.id, bookingSlotId: slot.id, appointmentDate };
+  const hairstyle = await createBookablePublicHairstyle();
+  return { name: `Window Customer ${contact}`, email: `window${contact}@example.test`, phone: `+1 555 030 ${String(contact).padStart(4, "0")}`, locationId: location.id, bookingSlotId: slot.id, appointmentDate, hairstyleId: hairstyle.id };
 }
 
 const weekday = (date: SalonDate) => salonWeekday(date) >= 1 && salonWeekday(date) <= 5;
@@ -149,9 +150,9 @@ describe("public creation enforces the booking window (YASMIN-1G)", { skip: inte
     let beyond = addSalonDays(today, 31);
     while (!weekday(beyond)) beyond = addSalonDays(beyond, 1);
 
-    const accepted = await createPublicBooking(input(location, slot, inside));
+    const accepted = await createPublicBooking(await input(location, slot, inside));
     assert.equal(accepted.booking.appointmentDate, inside);
-    await assert.rejects(createPublicBooking(input(location, slot, beyond)), isCode("INVALID_APPOINTMENT_DATE"));
+    await assert.rejects(createPublicBooking(await input(location, slot, beyond)), isCode("INVALID_APPOINTMENT_DATE"));
     assert.equal(await prisma.appointment.count({ where: { appointmentDate: new Date(`${beyond}T00:00:00.000Z`) } }), 0);
 
     const customer = await createCustomer();
@@ -163,7 +164,7 @@ describe("public creation enforces the booking window (YASMIN-1G)", { skip: inte
     const { location, slot } = await publicBookingPlace();
     let saturday = salonToday(location.timeZone, await databaseNow());
     while (salonWeekday(saturday) !== 6) saturday = addSalonDays(saturday, 1);
-    await assert.rejects(createPublicBooking(input(location, slot, saturday)), isCode("ONLINE_BOOKING_CLOSED_FOR_DAY"));
+    await assert.rejects(createPublicBooking(await input(location, slot, saturday)), isCode("ONLINE_BOOKING_CLOSED_FOR_DAY"));
   });
 
   it("rejects a same-day slot inside the cutoff although an internal hold may take it", { skip: sameDayZone ? false : "no IANA zone is on a weekday daytime right now (UTC weekend)" }, async () => {
@@ -172,8 +173,8 @@ describe("public creation enforces the booking window (YASMIN-1G)", { skip: inte
     const today = salonToday(location.timeZone, now);
     const soon = await prisma.bookingSlot.create({ data: { locationId: location.id, localStartTime: new Date(`1970-01-01T${slotIn(location.timeZone, now, 30)}:00.000Z`), capacity: 10 } });
     const later = await prisma.bookingSlot.create({ data: { locationId: location.id, localStartTime: new Date(`1970-01-01T${slotIn(location.timeZone, now, 75)}:00.000Z`), capacity: 10 } });
-    await assert.rejects(createPublicBooking(input(location, soon, today)), isCode("ONLINE_BOOKING_CLOSED_FOR_DAY"));
-    const accepted = await createPublicBooking(input(location, later, today));
+    await assert.rejects(createPublicBooking(await input(location, soon, today)), isCode("ONLINE_BOOKING_CLOSED_FOR_DAY"));
+    const accepted = await createPublicBooking(await input(location, later, today));
     assert.equal(accepted.booking.appointmentDate, today);
     const customer = await createCustomer();
     const internal = await acquireBookingHold({ customerId: customer.id, locationId: location.id, bookingSlotId: soon.id, appointmentDate: today }, { now });
@@ -186,14 +187,15 @@ describe("public creation enforces the booking window (YASMIN-1G)", { skip: inte
     const day = weekday(date) ? date : nextWeekday(date);
     await fillSlot(slot, day, 2);
     const customersBefore = await prisma.customer.count();
-    await assert.rejects(createPublicBooking(input(location, slot, day)), isCode("CAPACITY_FULL"));
+    await assert.rejects(createPublicBooking(await input(location, slot, day)), isCode("CAPACITY_FULL"));
     assert.equal(await prisma.customer.count(), customersBefore);
   });
 
   it("admits exactly `capacity` of many concurrent public attempts", async () => {
     const { location, slot } = await publicBookingPlace({ capacity: 2 });
     const day = nextWeekday(salonToday(location.timeZone, await databaseNow()));
-    const results = await Promise.allSettled(Array.from({ length: 6 }, () => createPublicBooking(input(location, slot, day))));
+    const requests = await Promise.all(Array.from({ length: 6 }, () => input(location, slot, day)));
+    const results = await Promise.allSettled(requests.map((request) => createPublicBooking(request)));
     assert.equal(results.filter((result) => result.status === "fulfilled").length, 2);
     for (const result of results) if (result.status === "rejected") assert.ok(isCode("CAPACITY_FULL")(result.reason));
     assert.equal(await prisma.appointment.count({ where: { bookingSlotId: slot.id } }), 2);
@@ -204,11 +206,11 @@ describe("public creation enforces the booking window (YASMIN-1G)", { skip: inte
     const { location, slot } = await publicBookingPlace();
     const day = nextWeekday(salonToday(location.timeZone, await databaseNow()));
     const other = await createLocation({ name: "Second online" });
-    await assert.rejects(createPublicBooking(input(location, slot, day)), isCode("LOCATION_NOT_BOOKABLE"));
+    await assert.rejects(createPublicBooking(await input(location, slot, day)), isCode("LOCATION_NOT_BOOKABLE"));
     await prisma.salonLocation.update({ where: { id: other.location.id }, data: { acceptsOnlineBooking: false } });
-    await createPublicBooking(input(location, slot, day));
+    await createPublicBooking(await input(location, slot, day));
     await prisma.salonLocation.update({ where: { id: location.id }, data: { acceptsOnlineBooking: false } });
-    await assert.rejects(createPublicBooking(input(location, slot, day)), isCode("LOCATION_NOT_BOOKABLE"));
+    await assert.rejects(createPublicBooking(await input(location, slot, day)), isCode("LOCATION_NOT_BOOKABLE"));
   });
 });
 
