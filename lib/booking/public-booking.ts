@@ -10,7 +10,7 @@ import { dateClosedReason, locationClosedReason, publicBookingWindowClosedReason
 import { countConsumedCapacity, lockBookingSlotCapacity, remainingCapacity } from "./capacity";
 import { BookingError } from "./errors";
 import { BOOKING_HOLD_MINUTES } from "./holds";
-import { resolveCatalogBookingPrice, v1BookingPriceSnapshot } from "./pricing";
+import { resolveCatalogBookingPrice } from "./pricing";
 import { PUBLIC_BOOKING_LIMITS as LIMITS, PUBLIC_EMAIL_PATTERN, PUBLIC_PHONE_PATTERN } from "./public-booking-rules";
 import { parseSalonDate, salonClockTimeFromDatabase, salonDateToDatabase } from "./salon-calendar";
 
@@ -21,6 +21,8 @@ export type PublicBookingInput = {
   locationId: string;
   bookingSlotId: string;
   appointmentDate: string;
+  /** Required by parsePublicBookingInput for all new public holds. Optional in
+   * this structural type only so legacy internal test fixtures remain typed. */
   hairstyleId?: string | null;
   hairstyleVariantId?: string | null;
   preferredStylistName?: string | null;
@@ -92,10 +94,19 @@ export async function createPublicBooking(value: unknown, options: PublicBooking
     if (windowReason) throw new BookingError(windowReason, "This date or time is outside the online booking window.");
     const consumed = await countConsumedCapacity(tx, { bookingSlotId: slot.id, appointmentDate: date }, now);
     if (remainingCapacity(slot.capacity, consumed) === 0) throw new BookingError("CAPACITY_FULL", "Slot is full.");
-    const catalogPricing = input.hairstyleId
-      ? await resolveCatalogBookingPrice(tx, { hairstyleId: input.hairstyleId, hairstyleVariantId: input.hairstyleVariantId })
-      : null;
-    const pricing = catalogPricing ?? v1BookingPriceSnapshot();
+    // New public bookings always snapshot a currently bookable catalog choice.
+    // The legacy no-service price remains available only to older/internal
+    // callers whose separate contracts still use holds.ts.
+    const catalogPricing = await resolveCatalogBookingPrice(tx, {
+      hairstyleId: input.hairstyleId!,
+      hairstyleVariantId: input.hairstyleVariantId,
+    });
+    const pricing = {
+      totalPriceCents: catalogPricing.totalPriceCents,
+      depositAmountCents: catalogPricing.depositAmountCents,
+      balanceDueCents: catalogPricing.balanceDueCents,
+      currency: catalogPricing.currency,
+    };
     const customer = await tx.customer.create({ data: { name: input.name, email: input.email, phone: input.phone, emailMarketingAt: input.emailMarketingConsent ? now : null, smsMarketingAt: input.smsMarketingConsent ? now : null } });
     // Marketing consent is optional, per channel, and separate from the booking itself.
     await recordPublicFormConsent(tx, customer.id, { email: input.emailMarketingConsent === true, sms: input.smsMarketingConsent === true }, now);
@@ -164,7 +175,7 @@ export function parsePublicBookingInput(value: unknown): PublicBookingInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new PublicBookingValidationError("Expected an object.");
   const record = value as Record<string, unknown>;
   if (Object.keys(record).some((key) => !allowed.has(key))) throw new PublicBookingValidationError("Unknown public booking field.");
-  const required = ["name", "email", "phone", "locationId", "bookingSlotId", "appointmentDate"] as const;
+  const required = ["name", "email", "phone", "locationId", "bookingSlotId", "appointmentDate", "hairstyleId"] as const;
   for (const key of required) if (typeof record[key] !== "string" || !record[key].trim()) throw new PublicBookingValidationError(`Invalid ${key}.`);
   for (const key of ["hairstyleId", "hairstyleVariantId", "preferredStylistName", "customerNotes"]) if (record[key] !== undefined && record[key] !== null && typeof record[key] !== "string") throw new PublicBookingValidationError(`Invalid ${key}.`);
   for (const key of ["emailMarketingConsent", "smsMarketingConsent"]) if (record[key] !== undefined && typeof record[key] !== "boolean") throw new PublicBookingValidationError(`Invalid ${key}.`);
@@ -176,6 +187,7 @@ export function parsePublicBookingInput(value: unknown): PublicBookingInput {
     locationId: (record.locationId as string).trim(),
     bookingSlotId: (record.bookingSlotId as string).trim(),
     appointmentDate: (record.appointmentDate as string).trim(),
+    hairstyleId: (record.hairstyleId as string).trim(),
     emailMarketingConsent: record.emailMarketingConsent === true,
     smsMarketingConsent: record.smsMarketingConsent === true,
   } as PublicBookingInput;

@@ -12,9 +12,11 @@ export type ServiceEditorCategory = { id: string; name: string };
 export type ServiceEditorVariant = {
   id: string;
   name: string;
+  description: string | null;
   priceCents: number | null;
   isActive: boolean;
   sortOrder: number;
+  media?: ServicePhoto[];
 };
 
 export type ServiceEditorValue = {
@@ -34,6 +36,7 @@ type DraftVariant = {
   key: string;
   id?: string;
   name: string;
+  description: string;
   price: string;
   isActive: boolean;
   sortOrder: string;
@@ -50,10 +53,10 @@ function priceString(priceCents: number | null | undefined) {
 
 function isPrice(value: string) { return /^\d+(?:\.\d{1,2})?$/.test(value.trim()); }
 function variantFrom(value: ServiceEditorVariant): DraftVariant {
-  return { key: value.id, id: value.id, name: value.name, price: priceString(value.priceCents), isActive: value.isActive, sortOrder: String(value.sortOrder) };
+  return { key: value.id, id: value.id, name: value.name, description: value.description ?? "", price: priceString(value.priceCents), isActive: value.isActive, sortOrder: String(value.sortOrder) };
 }
 function emptyVariant(order: number): DraftVariant {
-  return { key: crypto.randomUUID(), name: "", price: "", isActive: false, sortOrder: String(order) };
+  return { key: crypto.randomUUID(), name: "", description: "", price: "", isActive: false, sortOrder: String(order) };
 }
 async function readError(response: Response) {
   const json = (await response.json().catch(() => null)) as ApiError | null;
@@ -103,6 +106,7 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
   const [notice, setNotice] = useState<string | null>(null);
   const [partialCreationId, setPartialCreationId] = useState<string | null>(null);
   const [deactivationTarget, setDeactivationTarget] = useState<DeactivationTarget | null>(null);
+  const originalPricingMode = service?.requiresVariant ? "variants" : "simple";
 
   const submitLabel = useMemo(() => saving ? "Saving…" : editing ? "Save service" : "Create service", [editing, saving]);
   const orderedVariants = [...variants].sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
@@ -141,6 +145,7 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
     const variantNames = new Set<string>();
     for (const variant of variants) {
       if (!variant.name.trim()) { setFieldErrors({ [`variant:${variant.key}:name`]: fail(`variant:${variant.key}:name`, "Enter a variant name.") }); return errors[`variant:${variant.key}:name`]; }
+      if (variant.description.length > 500) { setFieldErrors({ [`variant:${variant.key}:description`]: fail(`variant:${variant.key}:description`, "Variant descriptions can be at most 500 characters.") }); return errors[`variant:${variant.key}:description`]; }
       const normalizedName = variant.name.trim().toLocaleLowerCase();
       if (variantNames.has(normalizedName)) { setFieldErrors({ [`variant:${variant.key}:name`]: fail(`variant:${variant.key}:name`, "This variant name is already in use.") }); return errors[`variant:${variant.key}:name`]; }
       variantNames.add(normalizedName);
@@ -159,7 +164,7 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
   async function patchVariant(serviceId: string, variant: DraftVariant) {
     const response = await fetch(`/api/admin/services/${serviceId}`, {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind: "variant", variantId: variant.id, name: variant.name.trim(), price: variant.price.trim(), isActive: variant.isActive }),
+      body: JSON.stringify({ kind: "variant", variantId: variant.id, name: variant.name.trim(), description: variant.description.trim(), price: variant.price.trim(), isActive: variant.isActive }),
     });
     if (!response.ok) throw new Error(await readError(response));
   }
@@ -183,17 +188,41 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
       }
       const response = await fetch("/api/admin/services", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "variant", hairstyleId: serviceId, name: variant.name.trim(), price: variant.price.trim(), isActive: variant.isActive }),
+        body: JSON.stringify({ kind: "variant", hairstyleId: serviceId, name: variant.name.trim(), description: variant.description.trim(), price: variant.price.trim(), isActive: variant.isActive }),
       });
       if (!response.ok) throw new Error(await readError(response));
       const payload = await response.json() as { variant: { id: string } };
-      saved.push({ ...variant, id: payload.variant.id });
+      const persisted = { ...variant, id: payload.variant.id };
+      // A later row can still fail. Keep this identity in local state as soon
+      // as it is durable so retrying a staged conversion updates it instead
+      // of creating a duplicate variant.
+      setVariants((current) => current.map((item) => item.key === variant.key ? persisted : item));
+      saved.push(persisted);
     }
     const orderResponse = await fetch(`/api/admin/services/${serviceId}`, {
       method: "PATCH", headers: { "content-type": "application/json" },
       body: JSON.stringify({ kind: "variants-order", orderedVariantIds: saved.map((variant) => variant.id) }),
     });
     if (!orderResponse.ok) throw new Error(await readError(orderResponse));
+  }
+
+  async function deactivatePersistedVariants(serviceId: string) {
+    const persisted = variants.filter((variant) => variant.id);
+    for (const variant of persisted) {
+      const response = await fetch(`/api/admin/services/${serviceId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "variant",
+          variantId: variant.id,
+          name: variant.name.trim(),
+          description: variant.description.trim(),
+          price: variant.price.trim(),
+          isActive: false,
+        }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+    }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -210,7 +239,25 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
     try {
       const endpoint = editing ? `/api/admin/services/${service!.id}` : "/api/admin/services";
       const body = (active: boolean) => JSON.stringify({ kind: "service", name: name.trim(), categoryId, description: description.trim(), pricingMode, price: pricingMode === "simple" ? price.trim() : "", isActive: active, displayOrder: Number(displayOrder) });
-      if (pricingMode === "variants" && editing) {
+      const modeChanged = editing && originalPricingMode !== pricingMode;
+      if (modeChanged && pricingMode === "variants") {
+        // A simple-price service becomes a safe draft before any variants are
+        // written. The original price is only a browser-side suggestion; it
+        // is never invented as a named, bookable variant.
+        const transition = await fetch(endpoint, { method: "PATCH", headers: { "content-type": "application/json" }, body: body(false) });
+        if (!transition.ok) throw new Error(await readError(transition));
+        await saveVariants(service!.id);
+        const response = await fetch(endpoint, { method: "PATCH", headers: { "content-type": "application/json" }, body: body(isActive) });
+        if (!response.ok) throw new Error(await readError(response));
+      } else if (modeChanged && pricingMode === "simple") {
+        // Retain old variant rows for history but make every one unavailable
+        // before the parent leaves variant pricing.
+        const unpublish = await fetch(endpoint, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "service", name: name.trim(), categoryId, description: description.trim(), pricingMode: "variants", price: "", isActive: false, displayOrder: Number(displayOrder) }) });
+        if (!unpublish.ok) throw new Error(await readError(unpublish));
+        await deactivatePersistedVariants(service!.id);
+        const response = await fetch(endpoint, { method: "PATCH", headers: { "content-type": "application/json" }, body: body(isActive) });
+        if (!response.ok) throw new Error(await readError(response));
+      } else if (pricingMode === "variants" && editing) {
         if (service!.isActive && !isActive) {
           const unpublish = await fetch(endpoint, { method: "PATCH", headers: { "content-type": "application/json" }, body: body(false) });
           if (!unpublish.ok) throw new Error(await readError(unpublish));
@@ -241,6 +288,8 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
       if (createdDraftId) {
         setPartialCreationId(createdDraftId);
         setError("The draft service was created, but some variants or publication could not be saved. Continue editing the draft to finish it; no data was deleted.");
+      } else if (editing && originalPricingMode !== pricingMode) {
+        setError("The pricing-mode change was saved as a draft but could not be completed. Continue editing this service; no variants or appointment history were deleted.");
       } else {
         setError(caught instanceof Error ? caught.message : "We could not save this service.");
       }
@@ -259,20 +308,31 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
     </div>
     <label className={styles.actionLabel}>Description <span className={styles.fieldHint}>Optional</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} disabled={saving} /></label>
 
-    <fieldset className={styles.pricingMode} disabled={saving || editing}>
+    <fieldset className={styles.pricingMode} disabled={saving}>
       <legend>Pricing</legend>
       <label><input type="radio" checked={pricingMode === "simple"} onChange={() => setPricingMode("simple")} /> Single price</label>
-      <label><input type="radio" checked={pricingMode === "variants"} onChange={() => setPricingMode("variants")} /> Prices by variant</label>
-      {editing ? <p className={styles.fieldHint}>Pricing mode is fixed after a service is created.</p> : null}
+      <label><input type="radio" checked={pricingMode === "variants"} onChange={() => {
+        setPricingMode("variants");
+        if (variants.length === 0) setVariants([{
+          ...emptyVariant(0),
+          // This is deliberately unnamed and inactive until Yasmin chooses a
+          // real option name. It preserves the previous amount as an editable
+          // suggestion without silently creating a permanent variant.
+          price,
+        }]);
+      }} /> Prices by variant</label>
+      {editing ? <p className={styles.fieldHint}>Changing pricing mode saves the service as a draft while its new pricing is completed. Existing variants are retained; switching to one price deactivates them for future bookings.</p> : null}
     </fieldset>
     {pricingMode === "simple" ? <label className={styles.actionLabel}>Price (USD)<input value={price} onChange={(event) => setPrice(event.target.value)} inputMode="decimal" placeholder="e.g. 200.00" maxLength={12} disabled={saving} aria-invalid={Boolean(fieldErrors.price)} />{fieldErrors.price ? <span className={styles.fieldError}>{fieldErrors.price}</span> : null}</label> : <section className={styles.variantEditor} aria-label="Service variants">
       <div className={styles.variantHeading}><div><h2>Variants</h2><p>Active variants need a price of at least $40.00.</p></div><button className={styles.secondary} type="button" onClick={() => setVariants((current) => [...current, emptyVariant(current.length)])} disabled={saving}>Add variant</button></div>
       {orderedVariants.length === 0 ? <p className={styles.empty}>Add one or more variants before publishing this service.</p> : <div className={styles.variantList}>{orderedVariants.map((variant) => <div className={styles.variantRow} key={variant.key}>
         <label className={styles.actionLabel}>Variant name <span className={styles.required}>Required</span><input value={variant.name} onChange={(event) => updateVariant(variant.key, "name", event.target.value)} maxLength={120} disabled={saving} aria-invalid={Boolean(fieldErrors[`variant:${variant.key}:name`])} />{fieldErrors[`variant:${variant.key}:name`] ? <span className={styles.fieldError}>{fieldErrors[`variant:${variant.key}:name`]}</span> : null}</label>
+        <label className={styles.actionLabel}>Variant description <span className={styles.fieldHint}>Optional</span><textarea value={variant.description} onChange={(event) => updateVariant(variant.key, "description", event.target.value)} maxLength={500} disabled={saving} aria-invalid={Boolean(fieldErrors[`variant:${variant.key}:description`])} />{fieldErrors[`variant:${variant.key}:description`] ? <span className={styles.fieldError}>{fieldErrors[`variant:${variant.key}:description`]}</span> : null}</label>
         <label className={styles.actionLabel}>Price (USD)<input value={variant.price} onChange={(event) => updateVariant(variant.key, "price", event.target.value)} inputMode="decimal" maxLength={12} disabled={saving} aria-invalid={Boolean(fieldErrors[`variant:${variant.key}:price`])} />{fieldErrors[`variant:${variant.key}:price`] ? <span className={styles.fieldError}>{fieldErrors[`variant:${variant.key}:price`]}</span> : null}</label>
         <label className={styles.actionLabel}>Order<input value={variant.sortOrder} onChange={(event) => updateVariant(variant.key, "sortOrder", event.target.value)} type="number" min="0" step="1" disabled={saving} aria-invalid={Boolean(fieldErrors[`variant:${variant.key}:order`])} />{fieldErrors[`variant:${variant.key}:order`] ? <span className={styles.fieldError}>{fieldErrors[`variant:${variant.key}:order`]}</span> : null}</label>
         <label className={styles.variantActive}><input type="checkbox" checked={variant.isActive} onChange={(event) => { if (variant.isActive && !event.target.checked) setDeactivationTarget({ type: "variant", key: variant.key, remove: false }); else updateVariant(variant.key, "isActive", event.target.checked); }} disabled={saving} /> Active</label>
         <button className={styles.inlineButton} type="button" onClick={() => { if (variant.id) setDeactivationTarget({ type: "variant", key: variant.key, remove: true }); else setVariants((current) => current.filter((item) => item.key !== variant.key)); }} disabled={saving}>{variant.id ? "Deactivate" : "Remove"}</button>
+        {editing && variant.id ? <details className={styles.variantGallery}><summary>Photos for {variant.name || "this variant"}</summary><AdminServicePhotoGallery key={`${variant.id}:${variant.name}`} serviceId={service!.id} hairstyleVariantId={variant.id} variantName={variant.name} media={service?.variants.find((item) => item.id === variant.id)?.media ?? []} /></details> : <p className={styles.fieldHint}>Save this variant before adding photos.</p>}
       </div>)}</div>}
     </section>}
     {fieldErrors.variants ? <p className={styles.fieldError} role="alert">{fieldErrors.variants}</p> : null}

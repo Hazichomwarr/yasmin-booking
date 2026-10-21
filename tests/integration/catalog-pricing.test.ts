@@ -68,4 +68,25 @@ describe("catalog pricing", { skip: integrationSkip }, () => {
     const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: created.booking.appointmentId } });
     assert.deepEqual({ style: appointment.hairstyleNameSnapshot, variant: appointment.hairstyleVariantNameSnapshot, total: appointment.totalPriceCents, deposit: appointment.depositAmountCents, balance: appointment.balanceDueCents, currency: appointment.currency }, { style: "Bob", variant: "Medium", total: 20_000, deposit: 4_000, balance: 16_000, currency: "usd" });
   });
+
+  it("re-resolves a selected service at hold creation when its catalog price changed", async () => {
+    const category = await catalog();
+    const style = await createHairstyle({ categoryId: category.id, name: "Silk Press", slug: "silk-press", priceCents: 18_000 });
+    const { location, slot } = await publicBookingPlace();
+    // This is the browser's stale selection: it has no authority over price.
+    await updateHairstyle(style.id, { priceCents: 21_000 });
+    const created = await createPublicBooking({
+      name: "Updated quote customer",
+      email: "updated-quote@example.test",
+      phone: "+1 555 010 0120",
+      locationId: location.id,
+      bookingSlotId: slot.id,
+      appointmentDate: upcomingPublicBookingDate(),
+      hairstyleId: style.id,
+    });
+    assert.deepEqual(
+      [created.booking.totalPriceCents, created.booking.depositAmountCents, created.booking.balanceDueCents],
+      [21_000, 4_000, 17_000],
+    );
+  });
 });

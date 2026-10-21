@@ -12,7 +12,9 @@ import { integrationSkip, useCleanTestDatabase } from "../support/integration-da
 
 async function input(capacity = 10) {
   const { location, slot } = await publicBookingPlace({ capacity });
-  return { name: "Yasmin Customer", email: "CUSTOMER@example.test", phone: "+1 (555) 010-0100", locationId: location.id, bookingSlotId: slot.id, appointmentDate: upcomingPublicBookingDate() };
+  const category = await prisma.hairstyleCategory.create({ data: { name: `Public category ${slot.id}`, slug: `public-category-${slot.id}` } });
+  const hairstyle = await prisma.hairstyle.create({ data: { categoryId: category.id, name: "Public booking style", slug: `public-style-${slot.id}`, priceCents: 22_000 } });
+  return { name: "Yasmin Customer", email: "CUSTOMER@example.test", phone: "+1 (555) 010-0100", locationId: location.id, bookingSlotId: slot.id, appointmentDate: upcomingPublicBookingDate(), hairstyleId: hairstyle.id };
 }
 async function fault(sql: string, fn: () => Promise<void>) {
   await prisma.$executeRawUnsafe("CREATE OR REPLACE FUNCTION public_booking_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'public booking fault'; END; $$");
@@ -62,10 +64,18 @@ describe("public booking creation", { skip: integrationSkip }, () => {
     const base = await input(); for (const value of [{ ...base, email: "bad" }, { ...base, phone: "x" }, { ...base, appointmentDate: "2027-02-30" }, { ...base, name: "x".repeat(121) }, { ...base, emailMarketingConsent: "yes" }, { ...base, customerId: "forbidden" }]) await assert.rejects(createPublicBooking(value), PublicBookingValidationError);
     assert.equal(await prisma.customer.count(), 0); assert.equal(await prisma.appointment.count(), 0);
   });
+  it("requires a bookable hairstyle before creating any customer or hold", async () => {
+    const base = await input();
+    const missingStyle: Record<string, unknown> = { ...base };
+    delete missingStyle.hairstyleId;
+    await assert.rejects(createPublicBooking(missingStyle), PublicBookingValidationError);
+    assert.equal(await prisma.customer.count(), 0);
+    assert.equal(await prisma.appointment.count(), 0);
+  });
   it("returns only the public booking allow-list", async () => {
     const result = await createPublicBooking(await input());
     assert.deepEqual(Object.keys(result.booking).sort(), ["appointmentDate", "appointmentId", "balanceDueCents", "depositAmountCents", "holdExpiresAt", "locationName", "slotTime", "totalPriceCents"].sort());
-    assert.deepEqual([result.booking.totalPriceCents, result.booking.depositAmountCents, result.booking.balanceDueCents], [20_000, 4_000, 16_000]);
+    assert.deepEqual([result.booking.totalPriceCents, result.booking.depositAmountCents, result.booking.balanceDueCents], [22_000, 4_000, 18_000]);
   });
   it("keeps email and SMS marketing consent independent", async () => {
     const cases = [[false, false, false, false], [true, false, true, false], [false, true, false, true], [true, true, true, true]] as const;

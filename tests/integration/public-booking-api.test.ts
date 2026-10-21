@@ -106,15 +106,18 @@ const tokenFrom = (setCookie: string | null) => {
 
 let sequence = 0;
 async function bookingInput(overrides: Record<string, unknown> = {}, capacity = 10) {
-  sequence += 1;
+  const inputSequence = ++sequence;
   const { location, slot } = await publicBookingPlace({ name: "API Street", capacity });
+  const category = await prisma.hairstyleCategory.create({ data: { name: `API category ${inputSequence}`, slug: `api-category-${inputSequence}` } });
+  const hairstyle = await prisma.hairstyle.create({ data: { categoryId: category.id, name: `API style ${inputSequence}`, slug: `api-style-${inputSequence}`, priceCents: 20_000 } });
   return {
-    name: `API Customer ${sequence}`,
-    email: `api${sequence}@example.test`,
-    phone: `+1 555 020 ${String(sequence).padStart(4, "0")}`,
+    name: `API Customer ${inputSequence}`,
+    email: `api${inputSequence}@example.test`,
+    phone: `+1 555 020 ${String(inputSequence).padStart(4, "0")}`,
     locationId: location.id,
     bookingSlotId: slot.id,
     appointmentDate: upcomingPublicBookingDate(),
+    hairstyleId: hairstyle.id,
     ...overrides,
   };
 }
@@ -238,7 +241,7 @@ describe("public booking API", { skip: integrationSkip }, () => {
       })));
       assert.equal(response.status, 200);
       assert.deepEqual(Object.keys(response.json.booking).sort(), [
-        "appointmentDate", "balanceDueCents", "canStartCheckout", "depositAmountCents", "depositPaid", "hairstyleName", "holdExpiresAt", "locationAddress", "locationName", "slotTime", "state", "totalPriceCents",
+        "appointmentDate", "balanceDueCents", "canStartCheckout", "depositAmountCents", "depositPaid", "hairstyleName", "hairstyleVariantName", "holdExpiresAt", "locationAddress", "locationName", "slotTime", "state", "totalPriceCents",
       ]);
       assert.equal(response.json.booking.state, "awaiting-payment");
       assert.equal((await status(h, { cookie: b, ip: "203.0.113.12" })).json.booking.state, "cancelled");

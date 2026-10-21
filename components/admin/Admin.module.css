@@ -337,7 +337,11 @@
 .variantList { display: grid; gap: 10px; }
 .variantRow { display: grid; gap: 10px; padding: 14px; border: 1px solid #eedfd8; border-radius: 12px; background: #fff; }
 .variantRow .actionLabel { margin: 0; }
+.variantRow .actionLabel:has(textarea) { grid-column: 1 / -1; }
 .variantActive { display: flex; align-items: center; gap: 8px; min-height: 44px; color: #65585c; font-size: 0.9rem; font-weight: 700; }
+.variantGallery { grid-column: 1 / -1; display: grid; gap: 12px; }
+.variantGallery summary { cursor: pointer; color: #a91f4d; font-weight: 700; }
+.variantGallery[open] summary { margin-bottom: 4px; }
 
 .photoGallery { display: grid; gap: 16px; padding: 18px; border: 1px solid #eedfd8; border-radius: 14px; background: #fffaf8; }
 .photoGallery h2 { margin: 0; font: 1.25rem/1.2 Georgia, serif; }

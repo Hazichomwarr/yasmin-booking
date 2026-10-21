@@ -6,14 +6,14 @@ import { isApprovedBlobDeliveryUrl } from "@/lib/media/blob-public-origin";
 import styles from "./TrendingStyles.module.css";
 
 export async function TrendingStyles() {
-  const catalogStyles = await listPublicHairstyles();
+  const catalogStyles = await listPublicHairstyles({}, {
+    isDeliveryUrlAllowed: (deliveryUrl) => isApprovedBlobDeliveryUrl(deliveryUrl, process.env.BLOB_PUBLIC_BASE_URL),
+  });
   const cards = [
     ...catalogStyles.slice(0, 4).map((style) => ({
       key: style.id,
       name: style.name,
-      coverImage: style.coverImage && isApprovedBlobDeliveryUrl(style.coverImage.deliveryUrl, process.env.BLOB_PUBLIC_BASE_URL)
-        ? style.coverImage
-        : null,
+      coverImage: style.coverImage,
     })),
     ...trendingStyles.slice(catalogStyles.length, 4).map((style) => ({
       key: `fallback-${style.name}`,

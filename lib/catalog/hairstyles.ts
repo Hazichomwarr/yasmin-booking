@@ -85,7 +85,9 @@ export async function getHairstyleDetailForAdmin(
     where: { id: hairstyleId },
     select: {
       ...adminHairstyleSelect,
-      media: { select: adminMediaSelect, orderBy: mediaOrder },
+      // Preserve the existing service-gallery contract. Variant galleries are
+      // managed separately and must never become service covers by accident.
+      media: { where: { hairstyleVariantId: null }, select: adminMediaSelect, orderBy: mediaOrder },
       variants: { select: adminHairstyleVariantSelect, orderBy: variantOrder },
     },
   });
@@ -147,35 +149,50 @@ export async function updateHairstyle(
       if (data.requiresVariant === true && data.priceCents !== undefined && data.priceCents !== null) {
         throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
       }
-      const current = await prisma.hairstyle.findUnique({
-        where: { id: hairstyleId },
-        select: {
-          requiresVariant: true,
-          priceCents: true,
-          isActive: true,
-          variants: { where: { isActive: true, priceCents: { not: null } }, select: { id: true }, take: 1 },
-        },
-      });
-      if (!current) throw hairstyleNotFound(hairstyleId);
-      const requiresVariant = data.requiresVariant ?? current.requiresVariant;
-      const priceCents = data.priceCents === undefined ? current.priceCents : data.priceCents;
-      const isActive = data.isActive ?? current.isActive;
-      if (requiresVariant && priceCents !== null) {
-        throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
-      }
-      if (isActive && ((!requiresVariant && priceCents === null) || (requiresVariant && current.variants.length === 0))) {
-        throw new CatalogError("INVALID_PRICE", "A service must have an active price before it can be published.");
-      }
-      const row = await prisma.hairstyle.update({
-        where: { id: hairstyleId },
-        data,
-        select: adminHairstyleSelect,
+      const row = await prisma.$transaction(async (tx) => {
+        await lockHairstyle(tx, hairstyleId);
+        const current = await tx.hairstyle.findUnique({
+          where: { id: hairstyleId },
+          select: {
+            requiresVariant: true,
+            priceCents: true,
+            isActive: true,
+            variants: { where: { isActive: true, priceCents: { not: null } }, select: { id: true }, take: 1 },
+          },
+        });
+        if (!current) throw hairstyleNotFound(hairstyleId);
+        const activeVariantCount = current.requiresVariant && data.requiresVariant === false
+          ? await tx.hairstyleVariant.count({ where: { hairstyleId, isActive: true } })
+          : 0;
+        const requiresVariant = data.requiresVariant ?? current.requiresVariant;
+        const priceCents = data.priceCents === undefined ? current.priceCents : data.priceCents;
+        const isActive = data.isActive ?? current.isActive;
+        assertSafePricingModeTransition(current, activeVariantCount, requiresVariant, priceCents, isActive);
+        if (requiresVariant && priceCents !== null) {
+          throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
+        }
+        // Older catalogs can contain active, unpriced records. They are not
+        // bookable, but benign metadata changes and deactivation must remain
+        // possible so historical appointments still reference a manageable
+        // catalog record. Enforce publication pricing when the request
+        // explicitly publishes or changes pricing configuration.
+        const changesPricing = data.priceCents !== undefined || data.requiresVariant !== undefined;
+        if ((data.isActive === true || (current.isActive && changesPricing)) &&
+          ((!requiresVariant && priceCents === null) || (requiresVariant && current.variants.length === 0))) {
+          throw new CatalogError("INVALID_PRICE", "A service must have an active price before it can be published.");
+        }
+        return tx.hairstyle.update({
+          where: { id: hairstyleId },
+          data,
+          select: adminHairstyleSelect,
+        });
       });
       return toAdminHairstyle(row);
     }
 
     const destinationCategoryId = input.categoryId;
     const row = await prisma.$transaction(async (tx) => {
+      await lockHairstyle(tx, hairstyleId);
       const current = await tx.hairstyle.findUnique({
         where: { id: hairstyleId },
         select: {
@@ -187,14 +204,20 @@ export async function updateHairstyle(
         },
       });
       if (!current) throw hairstyleNotFound(hairstyleId);
+      const activeVariantCount = current.requiresVariant && data.requiresVariant === false
+        ? await tx.hairstyleVariant.count({ where: { hairstyleId, isActive: true } })
+        : 0;
 
       const requiresVariant = data.requiresVariant ?? current.requiresVariant;
       const priceCents = data.priceCents === undefined ? current.priceCents : data.priceCents;
       const isActive = data.isActive ?? current.isActive;
+      assertSafePricingModeTransition(current, activeVariantCount, requiresVariant, priceCents, isActive);
       if (requiresVariant && priceCents !== null) {
         throw new CatalogError("INVALID_PRICE", "A variant-based hairstyle has prices on its variants, not on the hairstyle.");
       }
-      if (isActive && ((!requiresVariant && priceCents === null) || (requiresVariant && current.variants.length === 0))) {
+      const changesPricing = data.priceCents !== undefined || data.requiresVariant !== undefined;
+      if ((data.isActive === true || (current.isActive && changesPricing)) &&
+        ((!requiresVariant && priceCents === null) || (requiresVariant && current.variants.length === 0))) {
         throw new CatalogError("INVALID_PRICE", "A service must have an active price before it can be published.");
       }
 
@@ -217,6 +240,42 @@ export async function updateHairstyle(
     if (isRecordNotFound(error)) throw hairstyleNotFound(hairstyleId);
     if (data.slug && isUniqueViolationOn(error, "slug")) throw slugTaken(data.slug);
     throw error;
+  }
+}
+
+/**
+ * Pricing-mode switches are deliberately staged by the authenticated editor:
+ * the service is made a draft first, variants are created or deactivated, and
+ * only then can it be published. This protects current bookings from an
+ * incomplete configuration while retaining every persisted variant for
+ * historical associations.
+ */
+function assertSafePricingModeTransition(
+  current: {
+    requiresVariant: boolean;
+  },
+  activeVariantCount: number,
+  nextRequiresVariant: boolean,
+  nextPriceCents: number | null,
+  nextIsActive: boolean,
+) {
+  if (current.requiresVariant === nextRequiresVariant) return;
+
+  if (nextRequiresVariant) {
+    if (nextIsActive || nextPriceCents !== null) {
+      throw new CatalogError(
+        "INVALID_PRICE",
+        "Switch to variant pricing while this service is a draft, then add an active priced variant before publishing.",
+      );
+    }
+    return;
+  }
+
+  if (activeVariantCount > 0) {
+    throw new CatalogError(
+      "INVALID_PRICE",
+      "Deactivate this service's variants before switching to a single price.",
+    );
   }
 }
 
@@ -354,6 +413,14 @@ async function lockCategory(tx: Prisma.TransactionClient, categoryId: string) {
   if (locked.length === 0) {
     throw new CatalogError("CATEGORY_NOT_FOUND", `Category ${categoryId} does not exist.`);
   }
+}
+
+/** Serializes pricing-mode transitions with variant writers. */
+async function lockHairstyle(tx: Prisma.TransactionClient, hairstyleId: string) {
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Hairstyle" WHERE "id" = ${hairstyleId} FOR UPDATE
+  `;
+  if (locked.length === 0) throw hairstyleNotFound(hairstyleId);
 }
 
 async function nextPositionInCategory(

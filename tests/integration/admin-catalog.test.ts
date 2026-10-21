@@ -7,6 +7,7 @@ import { ADMIN_COOKIE_NAME } from "@/lib/admin/session-cookie";
 import { isBookingError } from "@/lib/booking/errors";
 import { resolveCatalogBookingPrice } from "@/lib/booking/pricing";
 import { createPublicBooking } from "@/lib/booking/public-booking";
+import { listPublicBookableHairstyles } from "@/lib/catalog";
 import { adminCatalogPatch, adminCatalogPost } from "@/lib/http/admin-catalog-api";
 import { prisma } from "@/lib/prisma";
 
@@ -146,7 +147,7 @@ describe("admin catalog mutations", { skip: integrationSkip }, () => {
     const token = await signedIn();
     const category = await createCategory(token);
     const service = await createService(token, { name: "Bob", categoryId: category.id, pricingMode: "variants", price: "", isActive: false });
-    const mediumResponse = await adminCatalogPost(request({ kind: "variant", hairstyleId: service.id, name: "Medium", price: "200.00", isActive: true }, { token }));
+    const mediumResponse = await adminCatalogPost(request({ kind: "variant", hairstyleId: service.id, name: "Medium", description: "  Shoulder length  ", price: "200.00", isActive: true }, { token }));
     assert.equal(mediumResponse.status, 201);
     const medium = (await responseJson(mediumResponse)).variant as { id: string };
     const largeResponse = await adminCatalogPost(request({ kind: "variant", hairstyleId: service.id, name: "Large", price: "260.00", isActive: true }, { token }));
@@ -155,9 +156,17 @@ describe("admin catalog mutations", { skip: integrationSkip }, () => {
 
     const publish = await patch(service.id, { kind: "service", name: "Bob", categoryId: category.id, description: "", pricingMode: "variants", price: "", isActive: true, displayOrder: 0 }, token);
     assert.equal(publish.status, 200);
-    const changed = await patch(service.id, { kind: "variant", variantId: medium.id, name: "Medium length", price: "220.00", isActive: true }, token);
+    const changed = await patch(service.id, { kind: "variant", variantId: medium.id, name: "Medium length", description: "  Sleek and versatile  ", price: "220.00", isActive: true }, token);
     assert.equal(changed.status, 200);
-    assert.equal((await prisma.hairstyleVariant.findUniqueOrThrow({ where: { id: medium.id } })).id, medium.id);
+    assert.deepEqual(
+      await prisma.hairstyleVariant.findUniqueOrThrow({ where: { id: medium.id }, select: { id: true, description: true } }),
+      { id: medium.id, description: "Sleek and versatile" },
+    );
+    const clearedDescription = await patch(service.id, { kind: "variant", variantId: medium.id, description: "", price: "220.00", isActive: true }, token);
+    assert.equal(clearedDescription.status, 200);
+    assert.equal((await prisma.hairstyleVariant.findUniqueOrThrow({ where: { id: medium.id } })).description, null);
+    const tooLongDescription = await patch(service.id, { kind: "variant", variantId: medium.id, description: "x".repeat(501), price: "220.00", isActive: true }, token);
+    assert.equal(tooLongDescription.status, 400);
     const reordered = await patch(service.id, { kind: "variants-order", orderedVariantIds: [large.id, medium.id] }, token);
     assert.equal(reordered.status, 200);
     assert.deepEqual((await prisma.hairstyleVariant.findMany({ where: { hairstyleId: service.id }, orderBy: { sortOrder: "asc" } })).map((variant) => variant.id), [large.id, medium.id]);
@@ -198,5 +207,130 @@ describe("admin catalog mutations", { skip: integrationSkip }, () => {
     assert.deepEqual({ style: after.hairstyleNameSnapshot, variant: after.hairstyleVariantNameSnapshot, total: after.totalPriceCents, deposit: after.depositAmountCents, balance: after.balanceDueCents, currency: after.currency }, { style: "Bob", variant: "Medium", total: 20_000, deposit: 4_000, balance: 16_000, currency: "usd" });
     assert.deepEqual(after.payments, before.payments);
     assert.deepEqual(after.events, before.events);
+  });
+
+  it("stages pricing-mode changes without deleting variants or rewriting booking snapshots", async () => {
+    const token = await signedIn();
+    const category = await createCategory(token);
+    const simple = await createService(token, {
+      name: "Convertible style",
+      categoryId: category.id,
+      pricingMode: "simple",
+      price: "200.00",
+      isActive: true,
+    });
+
+    const invalidDirectSwitch = await patch(simple.id, {
+      kind: "service",
+      name: "Convertible style",
+      categoryId: category.id,
+      description: "",
+      pricingMode: "variants",
+      price: "",
+      isActive: true,
+      displayOrder: 0,
+    }, token);
+    assert.equal(invalidDirectSwitch.status, 400);
+
+    const asVariantDraft = await patch(simple.id, {
+      kind: "service",
+      name: "Convertible style",
+      categoryId: category.id,
+      description: "",
+      pricingMode: "variants",
+      price: "",
+      isActive: false,
+      displayOrder: 0,
+    }, token);
+    assert.equal(asVariantDraft.status, 200);
+    const variantResponse = await adminCatalogPost(request({
+      kind: "variant",
+      hairstyleId: simple.id,
+      name: "Medium",
+      price: "240.00",
+      isActive: true,
+    }, { token }));
+    assert.equal(variantResponse.status, 201);
+    const variant = (await responseJson(variantResponse)).variant as { id: string };
+    assert.equal((await patch(simple.id, {
+      kind: "service",
+      name: "Convertible style",
+      categoryId: category.id,
+      description: "",
+      pricingMode: "variants",
+      price: "",
+      isActive: true,
+      displayOrder: 0,
+    }, token)).status, 200);
+    assert.deepEqual((await listPublicBookableHairstyles()).map((style) => ({
+      id: style.id,
+      requiresVariant: style.requiresVariant,
+      price: style.priceCents,
+      variants: style.variants.map(({ id, name, priceCents }) => ({ id, name, priceCents })),
+    })), [{
+      id: simple.id,
+      requiresVariant: true,
+      price: null,
+      variants: [{ id: variant.id, name: "Medium", priceCents: 24_000 }],
+    }]);
+
+    const { location, slot } = await publicBookingPlace();
+    const created = await createPublicBooking({
+      name: "Mode snapshot customer",
+      email: "mode-snapshot@example.test",
+      phone: "+1 555 010 0199",
+      locationId: location.id,
+      bookingSlotId: slot.id,
+      appointmentDate: upcomingPublicBookingDate(),
+      hairstyleId: simple.id,
+      hairstyleVariantId: variant.id,
+    });
+    const before = await prisma.appointment.findUniqueOrThrow({ where: { id: created.booking.appointmentId } });
+
+    assert.equal((await patch(simple.id, {
+      kind: "service",
+      name: "Convertible style",
+      categoryId: category.id,
+      description: "",
+      pricingMode: "variants",
+      price: "",
+      isActive: false,
+      displayOrder: 0,
+    }, token)).status, 200);
+    assert.equal((await patch(simple.id, {
+      kind: "variant",
+      variantId: variant.id,
+      name: "Medium",
+      price: "240.00",
+      isActive: false,
+    }, token)).status, 200);
+    assert.equal((await patch(simple.id, {
+      kind: "service",
+      name: "Convertible style",
+      categoryId: category.id,
+      description: "",
+      pricingMode: "simple",
+      price: "220.00",
+      isActive: true,
+      displayOrder: 0,
+    }, token)).status, 200);
+
+    const retainedVariant = await prisma.hairstyleVariant.findUniqueOrThrow({ where: { id: variant.id } });
+    assert.deepEqual({ isActive: retainedVariant.isActive, priceCents: retainedVariant.priceCents }, { isActive: false, priceCents: 24_000 });
+    assert.deepEqual(await resolveCatalogBookingPrice(prisma, { hairstyleId: simple.id }), {
+      hairstyleId: simple.id,
+      hairstyleNameSnapshot: "Convertible style",
+      hairstyleVariantId: null,
+      hairstyleVariantNameSnapshot: null,
+      totalPriceCents: 22_000,
+      depositAmountCents: 4_000,
+      balanceDueCents: 18_000,
+      currency: "usd",
+    });
+    const after = await prisma.appointment.findUniqueOrThrow({ where: { id: before.id } });
+    assert.deepEqual(
+      [after.hairstyleNameSnapshot, after.hairstyleVariantNameSnapshot, after.totalPriceCents, after.depositAmountCents, after.balanceDueCents, after.currency],
+      ["Convertible style", "Medium", 24_000, 4_000, 20_000, "usd"],
+    );
   });
 });

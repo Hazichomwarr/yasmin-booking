@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { describe, it } from "node:test";
 
 import {
@@ -29,6 +30,43 @@ describe("hairstyle image upload intent", () => {
         pathname: intent.pathname,
       }, { now: 1_001 }).pathname,
       intent.pathname,
+    );
+  });
+
+  it("binds a version 2 permission to its variant while retaining version 1 service permissions", () => {
+    const variant = issueHairstyleImageUploadIntent(
+      storage,
+      { hairstyleId: "style_1", hairstyleVariantId: "variant_1", contentType: "image/jpeg" },
+      { now: 1_000, randomId: () => "variant-object" },
+    );
+    assert.equal(variant.pathname, "hairstyles/style_1/variants/variant_1/variant-object.jpg");
+    assert.equal(
+      verifyHairstyleImageUploadIntent(variant.clientPayload, storage, {
+        hairstyleId: "style_1",
+        hairstyleVariantId: "variant_1",
+      }, { now: 1_001 }).hairstyleVariantId,
+      "variant_1",
+    );
+    assert.throws(
+      () => verifyHairstyleImageUploadIntent(variant.clientPayload, storage, {
+        hairstyleId: "style_1",
+        hairstyleVariantId: "variant_2",
+      }, { now: 1_001 }),
+      (error: unknown) => error instanceof HairstyleImageUploadError && error.code === "INVALID_UPLOAD_INTENT",
+    );
+
+    const legacy = {
+      v: 1,
+      hairstyleId: "style_1",
+      pathname: "hairstyles/style_1/legacy.jpg",
+      contentType: "image/jpeg",
+      validUntil: 2_000,
+    };
+    const encoded = Buffer.from(JSON.stringify(legacy), "utf8").toString("base64url");
+    const clientPayload = `${encoded}.${createHmac("sha256", storage.token).update(encoded, "utf8").digest("base64url")}`;
+    assert.equal(
+      verifyHairstyleImageUploadIntent(clientPayload, storage, { hairstyleId: "style_1" }, { now: 1_001 }).hairstyleVariantId,
+      null,
     );
   });
 

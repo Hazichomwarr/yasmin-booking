@@ -71,6 +71,9 @@ export function isPubliclyVisible(hairstyle: {
 /** Public media must have somewhere to be delivered from. */
 export const publiclyDeliverableMedia = {
   deliveryUrl: { not: null },
+  // Variant galleries are deliberately not part of existing public service
+  // reads until the customer-facing variant gallery experience is introduced.
+  hairstyleVariantId: null,
 } satisfies Prisma.HairstyleMediaWhereInput;
 
 // ---------------------------------------------------------------------------
@@ -91,6 +94,7 @@ export type AdminCategory = {
 export type AdminMedia = {
   id: string;
   hairstyleId: string;
+  hairstyleVariantId: string | null;
   type: MediaType;
   storageKey: string;
   deliveryUrl: string | null;
@@ -120,6 +124,7 @@ export type AdminHairstyleVariant = {
   id: string;
   hairstyleId: string;
   name: string;
+  description: string | null;
   priceCents: number | null;
   isActive: boolean;
   sortOrder: number;
@@ -146,6 +151,7 @@ export const adminCategorySelect = {
 export const adminMediaSelect = {
   id: true,
   hairstyleId: true,
+  hairstyleVariantId: true,
   type: true,
   storageKey: true,
   deliveryUrl: true,
@@ -173,6 +179,7 @@ export const adminHairstyleVariantSelect = {
   id: true,
   hairstyleId: true,
   name: true,
+  description: true,
   priceCents: true,
   isActive: true,
   sortOrder: true,
@@ -215,9 +222,11 @@ export type PublicHairstyle = {
   category: { name: string; slug: string };
   /** First deliverable IMAGE in media order, for catalog cards. */
   coverImage: PublicMedia | null;
+  /** Ordered service-gallery images. Variant galleries are never mixed in. */
+  gallery: PublicMedia[];
 };
 
-export type PublicHairstyleDetail = Omit<PublicHairstyle, "coverImage"> & {
+export type PublicHairstyleDetail = Omit<PublicHairstyle, "coverImage" | "gallery"> & {
   media: PublicMedia[];
 };
 

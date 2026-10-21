@@ -6,6 +6,7 @@ import {
   attachHairstyleImageIdempotently,
   getHairstyleDetailForAdmin,
   isCatalogError,
+  listHairstyleMedia,
   MEDIA_LIMITS,
 } from "@/lib/catalog";
 import {
@@ -43,6 +44,7 @@ export type AdminHairstyleMediaUploadApiDeps = {
   env: () => Readonly<Record<string, string | undefined>>;
   resolveSession: typeof resolveAdminSession;
   getHairstyle: (id: string) => Promise<AdminMediaDetail>;
+  listMedia: typeof listHairstyleMedia;
   attachImage: typeof attachHairstyleImageIdempotently;
   queueUnattachedCleanup: typeof queueUnattachedHairstyleImageCleanup;
   blob: BlobClientUploadGateway;
@@ -53,6 +55,7 @@ const defaultDeps: AdminHairstyleMediaUploadApiDeps = {
   env: () => process.env,
   resolveSession: resolveAdminSession,
   getHairstyle: getHairstyleDetailForAdmin,
+  listMedia: listHairstyleMedia,
   attachImage: attachHairstyleImageIdempotently,
   queueUnattachedCleanup: queueUnattachedHairstyleImageCleanup,
   blob: vercelBlobClientGateway,
@@ -65,6 +68,29 @@ function response(status: number, code: string, message: string) {
 
 function isImageContentType(value: unknown): value is (typeof HAIRSTYLE_IMAGE_CONTENT_TYPES)[number] {
   return typeof value === "string" && (HAIRSTYLE_IMAGE_CONTENT_TYPES as readonly string[]).includes(value);
+}
+
+function isVariantId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseGalleryVariantId(value: unknown): string | null | undefined {
+  if (value === undefined) return null;
+  if (value === null || isVariantId(value)) return value === null ? null : value.trim();
+  return undefined;
+}
+
+async function countGalleryImages(
+  hairstyleId: string,
+  hairstyleVariantId: string | null,
+  deps: AdminHairstyleMediaUploadApiDeps,
+) {
+  const hairstyle = await deps.getHairstyle(hairstyleId);
+  if (hairstyleVariantId !== null && !hairstyle.variants.some((variant) => variant.id === hairstyleVariantId)) {
+    throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The selected variant does not belong to this hairstyle.");
+  }
+  const media = await deps.listMedia(hairstyleId, hairstyleVariantId);
+  return media.filter((item) => item.type === "IMAGE").length;
 }
 
 function parseUploadBody(input: Record<string, unknown>): HandleUploadBody | null {
@@ -119,24 +145,123 @@ export async function createHairstyleImageUploadIntentApi(
   const authorized = await authorizeAdminMutation(request, adminConfig, deps);
   if ("response" in authorized) return authorized.response;
   const input = await readJsonBody(request);
-  if (!input || Object.keys(input).length !== 1 || !isImageContentType(input.contentType)) {
+  const hairstyleVariantId = input && parseGalleryVariantId(input.hairstyleVariantId);
+  if (
+    !input ||
+    ![1, 2].includes(Object.keys(input).length) ||
+    !Object.keys(input).every((key) => key === "contentType" || key === "hairstyleVariantId") ||
+    !isImageContentType(input.contentType) ||
+    hairstyleVariantId === undefined
+  ) {
     return response(400, "INVALID_INPUT", "Choose a supported image type.");
   }
 
   try {
-    const hairstyle = await deps.getHairstyle(hairstyleId);
-    if (hairstyle.media.filter((media) => media.type === "IMAGE").length >= MEDIA_LIMITS.IMAGE) {
-      return response(409, "MEDIA_LIMIT_REACHED", "This hairstyle already has the maximum number of images.");
+    if (await countGalleryImages(hairstyleId, hairstyleVariantId, deps) >= MEDIA_LIMITS.IMAGE) {
+      return response(409, "MEDIA_LIMIT_REACHED", "This gallery already has the maximum number of images.");
     }
-    const intent = issueHairstyleImageUploadIntent(storage, { hairstyleId, contentType: input.contentType });
+    const intent = issueHairstyleImageUploadIntent(storage, {
+      hairstyleId,
+      hairstyleVariantId,
+      contentType: input.contentType,
+    });
     return publicJson(201, {
       pathname: intent.pathname,
       clientPayload: intent.clientPayload,
       uploadUrl: `/api/admin/hairstyles/${encodeURIComponent(hairstyleId)}/media/upload`,
+      confirmUrl: `/api/admin/hairstyles/${encodeURIComponent(hairstyleId)}/media/upload/confirm`,
       validUntil: intent.validUntil,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof HairstyleImageUploadError) {
+      return response(400, error.code, error.message);
+    }
     return response(404, "HAIRSTYLE_NOT_FOUND", "The hairstyle was not found.");
+  }
+}
+
+function confirmationFailure(error: unknown) {
+  if (error instanceof HairstyleImageUploadError) {
+    return error.code === "UPLOAD_INTENT_EXPIRED"
+      ? response(400, error.code, "This photo's upload authorization expired. Remove it and select the photo again.")
+      : response(400, error.code, "The uploaded photo could not be verified. Remove it and select the photo again.");
+  }
+  if (isCatalogError(error, "MEDIA_LIMIT_REACHED")) {
+    return response(409, error.code, `This hairstyle already has the maximum of ${MEDIA_LIMITS.IMAGE} photos.`);
+  }
+  if (isCatalogError(error, "HAIRSTYLE_NOT_FOUND")) {
+    return response(404, error.code, "The hairstyle was not found.");
+  }
+  if (isCatalogError(error)) {
+    return response(409, error.code, "The uploaded photo could not be added to this hairstyle.");
+  }
+  return null;
+}
+
+/**
+ * POST: the signed-in owner's confirmation that a direct upload finished.
+ * Vercel Blob only sends completion callbacks to a publicly reachable
+ * deployment, so a local server never receives them. Attachment is keyed by
+ * the signed storage key: retried confirmations and a later provider callback
+ * converge on the same record.
+ */
+export async function confirmHairstyleImageUploadApi(
+  request: Request,
+  hairstyleId: string,
+  deps: AdminHairstyleMediaUploadApiDeps = defaultDeps,
+): Promise<Response> {
+  const env = deps.env();
+  const adminConfig = loadAdminConfig(env);
+  const storage = loadBlobStorageConfig(env);
+  if (!adminConfig || !storage) return response(503, "SERVICE_UNAVAILABLE", "Image uploads are temporarily unavailable.");
+  const authorized = await authorizeAdminMutation(request, adminConfig, deps);
+  if ("response" in authorized) return authorized.response;
+  const input = await readJsonBody(request);
+  if (!input || Object.keys(input).length !== 2 || typeof input.clientPayload !== "string" || typeof input.url !== "string") {
+    return response(400, "INVALID_INPUT", "The uploaded photo could not be identified.");
+  }
+
+  let pathname: string | undefined;
+  try {
+    const intent = verifyHairstyleImageUploadIntent(input.clientPayload, storage, { hairstyleId }, { completion: true });
+    pathname = intent.pathname;
+    // Checks the exact Blob origin before the provider lookup.
+    assertUploadedHairstyleImageIdentity({ url: input.url, pathname: intent.pathname, contentType: intent.contentType }, storage, intent);
+    let verified;
+    try {
+      verified = validateUploadedHairstyleImage(await deps.blob.head(input.url, storage.token), storage, intent);
+    } catch (error) {
+      if (error instanceof HairstyleImageUploadError) throw error;
+      deps.log({ outcome: "UPLOAD_CONFIRMATION_OBJECT_UNAVAILABLE", hairstyleId, pathname });
+      return response(502, "MEDIA_STORAGE_UNAVAILABLE", "The uploaded photo could not be found in storage. Retry the upload.");
+    }
+    try {
+      const { media } = await deps.attachImage({
+        hairstyleId: intent.hairstyleId,
+        hairstyleVariantId: intent.hairstyleVariantId,
+        storageKey: verified.pathname,
+        deliveryUrl: verified.url,
+      });
+      return publicJson(200, { media });
+    } catch (error) {
+      // The direct upload may have succeeded even when attachment loses a
+      // capacity race or rejects a cross-gallery path. Queue delayed cleanup
+      // for every failed attachment; the worker rechecks that no media record
+      // owns this storage key before it ever deletes anything.
+      await deps.queueUnattachedCleanup(intent.hairstyleId, verified.pathname).catch(() => undefined);
+      if (isCatalogError(error)) throw error;
+      deps.log({ outcome: "UPLOAD_CONFIRMATION_PENDING_RECONCILIATION", hairstyleId, pathname });
+      return response(503, "MEDIA_ATTACHMENT_PENDING_RECONCILIATION", "The photo uploaded but could not be saved to the gallery. Retry to attach it.");
+    }
+  } catch (error) {
+    const failure = confirmationFailure(error);
+    if (!failure) throw error;
+    deps.log({
+      outcome: error instanceof HairstyleImageUploadError || isCatalogError(error) ? error.code : "UPLOAD_CONFIRMATION_REJECTED",
+      hairstyleId,
+      pathname,
+    });
+    return failure;
   }
 }
 
@@ -178,9 +303,8 @@ export async function handleHairstyleImageUploadApi(
             throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "This image upload request is invalid.");
           }
           const intent = verifyHairstyleImageUploadIntent(clientPayload, storage, { hairstyleId, pathname });
-          const hairstyle = await deps.getHairstyle(hairstyleId);
-          if (hairstyle.media.filter((media) => media.type === "IMAGE").length >= MEDIA_LIMITS.IMAGE) {
-            throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "This hairstyle already has the maximum number of images.");
+          if (await countGalleryImages(hairstyleId, intent.hairstyleVariantId, deps) >= MEDIA_LIMITS.IMAGE) {
+            throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "This gallery already has the maximum number of images.");
           }
           return {
             allowedContentTypes: [...HAIRSTYLE_IMAGE_CONTENT_TYPES],
@@ -199,15 +323,16 @@ export async function handleHairstyleImageUploadApi(
           try {
             await deps.attachImage({
               hairstyleId: intent.hairstyleId,
+              hairstyleVariantId: intent.hairstyleVariantId,
               storageKey: verified.pathname,
               deliveryUrl: verified.url,
             });
           } catch (error) {
-            if (isCatalogError(error)) throw error;
             // The callback may be retried by Vercel Blob. Preserve that path
             // for a grace period, then let the durable worker remove an object
             // that remains unattached. The task stores no provider credential.
             await deps.queueUnattachedCleanup(intent.hairstyleId, verified.pathname);
+            if (isCatalogError(error)) throw error;
             throw new MediaAttachmentPendingReconciliationError(verified.pathname, error);
           }
         },

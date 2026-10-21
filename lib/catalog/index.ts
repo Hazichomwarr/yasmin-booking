@@ -79,8 +79,10 @@ export {
 
 export {
   getPublicHairstyleBySlug,
+  listPublicBookableHairstyles,
   listPublicCategories,
   listPublicHairstyles,
+  type PublicBookableHairstyle,
 } from "./public-catalog";
 
 /** The public visibility rule, for other domains (e.g. booking) to reuse. */

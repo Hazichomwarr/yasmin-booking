@@ -3,6 +3,7 @@ import { AdminShell } from "@/components/admin/AdminShell";
 import styles from "@/components/admin/Admin.module.css";
 import { getAdminHairstyleDetail, listAdminCatalog } from "@/lib/admin/catalog";
 import { requireAdmin } from "@/lib/admin/dal";
+import { listHairstyleMedia } from "@/lib/catalog";
 
 export default async function EditAdminServicePage({
   params,
@@ -15,6 +16,10 @@ export default async function EditAdminServicePage({
     listAdminCatalog(access),
     getAdminHairstyleDetail(access, serviceId),
   ]);
+  const variantMedia = await Promise.all(
+    service.variants.map(async (variant) => [variant.id, await listHairstyleMedia(service.id, variant.id)] as const),
+  );
+  const mediaByVariant = new Map(variantMedia);
 
   return (
     <AdminShell current="services" email={access.email}>
@@ -33,7 +38,7 @@ export default async function EditAdminServicePage({
             requiresVariant: service.requiresVariant,
             isActive: service.isActive,
             sortOrder: service.sortOrder,
-            variants: service.variants,
+            variants: service.variants.map((variant) => ({ ...variant, media: mediaByVariant.get(variant.id) ?? [] })),
             media: service.media,
           }}
         />

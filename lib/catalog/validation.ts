@@ -60,6 +60,23 @@ export function normalizeOptionalText(
   return text.length === 0 ? null : text;
 }
 
+export const VARIANT_DESCRIPTION_MAX_LENGTH = 500;
+
+/** Optional variant presentation copy. Empty input clears it; no truncation. */
+export function normalizeOptionalVariantDescription(
+  value: unknown,
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value !== null && typeof value !== "string") {
+    throw new CatalogError("INVALID_NAME", "Variant description must be text.");
+  }
+  const description = normalizeOptionalText(value);
+  if (description !== null && description !== undefined && description.length > VARIANT_DESCRIPTION_MAX_LENGTH) {
+    throw new CatalogError("INVALID_NAME", `Variant description must be at most ${VARIANT_DESCRIPTION_MAX_LENGTH} characters.`);
+  }
+  return description;
+}
+
 /** Prices are integer USD cents. Null is a deliberate draft/unpriced state. */
 export function normalizeOptionalPriceCents(value: unknown): number | null {
   if (value === null || value === undefined) return null;

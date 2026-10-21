@@ -21,6 +21,7 @@ const STATUS_KEYS = [
   "depositAmountCents",
   "depositPaid",
   "hairstyleName",
+  "hairstyleVariantName",
   "holdExpiresAt",
   "locationAddress",
   "locationName",
@@ -48,18 +49,34 @@ const stripe: StripeCheckoutAdapter = {
 };
 
 let sequence = 0;
-async function book(options: { name?: string; hairstyle?: boolean } = {}) {
-  sequence += 1;
+async function book(options: { name?: string } = {}) {
+  const inputSequence = ++sequence;
   const { location, slot } = await publicBookingPlace({ name: "Status Street" });
+  const category = await prisma.hairstyleCategory.create({
+    data: { name: `Status category ${inputSequence}`, slug: `status-category-${inputSequence}` },
+  });
+  const hairstyle = await prisma.hairstyle.create({
+    data: {
+      categoryId: category.id,
+      name: `Status style ${inputSequence}`,
+      slug: `status-style-${inputSequence}`,
+      requiresVariant: true,
+    },
+  });
+  const variant = await prisma.hairstyleVariant.create({
+    data: { hairstyleId: hairstyle.id, name: "Status option", priceCents: 20_000 },
+  });
   return createPublicBooking({
-    name: options.name ?? `Status Customer ${sequence}`,
-    email: `status${sequence}@example.test`,
-    phone: `+1 555 010 ${String(sequence).padStart(4, "0")}`,
+    name: options.name ?? `Status Customer ${inputSequence}`,
+    email: `status${inputSequence}@example.test`,
+    phone: `+1 555 010 ${String(inputSequence).padStart(4, "0")}`,
     locationId: location.id,
     bookingSlotId: slot.id,
     appointmentDate: upcomingPublicBookingDate(),
     customerNotes: "Private note for the stylist",
     preferredStylistName: "Amina",
+    hairstyleId: hairstyle.id,
+    hairstyleVariantId: variant.id,
   });
 }
 
@@ -100,7 +117,8 @@ describe("authorized booking status", { skip: integrationSkip }, () => {
     assert.equal(status.appointmentDate, upcomingPublicBookingDate());
     assert.equal(status.slotTime, created.booking.slotTime);
     assert.match(status.slotTime, /^\d{2}:\d{2}$/);
-    assert.equal(status.hairstyleName, null);
+    assert.equal(status.hairstyleName, "Status style 1");
+    assert.equal(status.hairstyleVariantName, "Status option");
     assert.deepEqual([status.totalPriceCents, status.depositAmountCents, status.balanceDueCents], [20_000, 4_000, 16_000]);
     assert.equal(status.depositPaid, false);
   });

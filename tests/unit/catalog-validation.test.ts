@@ -7,6 +7,7 @@ import {
   normalizeDeliveryUrl,
   normalizeName,
   normalizeOptionalText,
+  normalizeOptionalVariantDescription,
   normalizeSlug,
   normalizeStorageKey,
 } from "@/lib/catalog/validation";
@@ -48,6 +49,17 @@ describe("normalizeOptionalText", () => {
     assert.equal(normalizeOptionalText(null), null);
     assert.equal(normalizeOptionalText("   "), null);
     assert.equal(normalizeOptionalText("  Long and sleek "), "Long and sleek");
+  });
+});
+
+describe("normalizeOptionalVariantDescription", () => {
+  it("trims, clears empty input, and retains the explicit 500-character limit", async () => {
+    assert.equal(normalizeOptionalVariantDescription(undefined), undefined);
+    assert.equal(normalizeOptionalVariantDescription("  Sleek and lightweight  "), "Sleek and lightweight");
+    assert.equal(normalizeOptionalVariantDescription("   "), null);
+    assert.equal(normalizeOptionalVariantDescription("x".repeat(500)), "x".repeat(500));
+    await assertCatalogError(() => normalizeOptionalVariantDescription("x".repeat(501)), "INVALID_NAME");
+    await assertCatalogError(() => normalizeOptionalVariantDescription(42), "INVALID_NAME");
   });
 });
 

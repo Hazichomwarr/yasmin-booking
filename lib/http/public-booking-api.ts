@@ -115,6 +115,7 @@ export function publicStatusBody(status: PublicBookingStatus) {
     appointmentDate: status.appointmentDate,
     slotTime: status.slotTime,
     hairstyleName: status.hairstyleName,
+    hairstyleVariantName: status.hairstyleVariantName,
     totalPriceCents: status.totalPriceCents,
     depositAmountCents: status.depositAmountCents,
     balanceDueCents: status.balanceDueCents,

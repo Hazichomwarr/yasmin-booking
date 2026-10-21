@@ -138,6 +138,8 @@ export type PublicBookingStatus = {
   appointmentDate: SalonDate;
   slotTime: string;
   hairstyleName: string | null;
+  /** Booking-time variant snapshot; null for simple or legacy services. */
+  hairstyleVariantName: string | null;
   totalPriceCents: number;
   depositAmountCents: number;
   balanceDueCents: number;
@@ -166,6 +168,7 @@ export async function getAuthorizedBookingStatus(
     appointmentDate: salonDateFromDatabase(row.appointmentDate),
     slotTime: row.slotTimeSnapshot,
     hairstyleName: row.hairstyleNameSnapshot,
+    hairstyleVariantName: row.hairstyleVariantNameSnapshot,
     totalPriceCents: row.totalPriceCents,
     depositAmountCents: row.depositAmountCents,
     balanceDueCents: row.balanceDueCents,
@@ -200,6 +203,7 @@ async function readAuthorizedBooking(accessToken: unknown, clock: BookingAccessC
       appointmentDate: true,
       slotTimeSnapshot: true,
       hairstyleNameSnapshot: true,
+      hairstyleVariantNameSnapshot: true,
       totalPriceCents: true,
       depositAmountCents: true,
       balanceDueCents: true,

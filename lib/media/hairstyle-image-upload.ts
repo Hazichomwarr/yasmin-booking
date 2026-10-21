@@ -8,7 +8,8 @@ export type HairstyleImageContentType = (typeof HAIRSTYLE_IMAGE_CONTENT_TYPES)[n
 export const MAX_HAIRSTYLE_IMAGE_BYTES = 10 * 1024 * 1024;
 export const UPLOAD_INTENT_TTL_MS = 15 * 60 * 1000;
 
-const UPLOAD_INTENT_VERSION = 1;
+const UPLOAD_INTENT_VERSION = 2;
+const LEGACY_UPLOAD_INTENT_VERSION = 1;
 const COMPLETION_GRACE_MS = 60 * 60 * 1000;
 
 export type BlobStorageConfig = {
@@ -18,6 +19,8 @@ export type BlobStorageConfig = {
 
 export type HairstyleImageUploadIntent = {
   hairstyleId: string;
+  /** Null is the service gallery. Version 1 payloads always resolve to null. */
+  hairstyleVariantId: string | null;
   pathname: string;
   contentType: HairstyleImageContentType;
   validUntil: number;
@@ -45,9 +48,30 @@ export class HairstyleImageUploadError extends Error {
   }
 }
 
-type SignedIntent = {
-  v: number;
+type LegacySignedIntent = {
+  v: 1;
   hairstyleId: string;
+  pathname: string;
+  contentType: HairstyleImageContentType;
+  validUntil: number;
+};
+
+type VariantSignedIntent = {
+  v: 2;
+  hairstyleId: string;
+  /** Null explicitly denotes the existing service-level gallery. */
+  hairstyleVariantId: string | null;
+  pathname: string;
+  contentType: HairstyleImageContentType;
+  validUntil: number;
+};
+
+type SignedIntent = LegacySignedIntent | VariantSignedIntent;
+
+type VerifiedSignedIntent = {
+  v: 1 | 2;
+  hairstyleId: string;
+  hairstyleVariantId: string | null;
   pathname: string;
   contentType: HairstyleImageContentType;
   validUntil: number;
@@ -99,19 +123,24 @@ export function loadBlobStorageConfig(
  */
 export function issueHairstyleImageUploadIntent(
   config: BlobStorageConfig,
-  input: { hairstyleId: string; contentType: unknown },
+  input: { hairstyleId: string; hairstyleVariantId?: string | null; contentType: unknown },
   options: { now?: number; randomId?: () => string } = {},
 ): HairstyleImageUploadIntent {
   if (typeof input.hairstyleId !== "string" || input.hairstyleId.trim().length === 0 || !isImageContentType(input.contentType)) {
     throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The image upload request is invalid.");
   }
   const hairstyleId = input.hairstyleId.trim();
+  const hairstyleVariantId = normalizeVariantId(input.hairstyleVariantId);
   const now = options.now ?? Date.now();
   const validUntil = now + UPLOAD_INTENT_TTL_MS;
-  const pathname = `hairstyles/${hairstyleId}/${(options.randomId ?? randomUUID)()}.${extensionFor(input.contentType)}`;
+  const directory = hairstyleVariantId === null
+    ? `hairstyles/${hairstyleId}`
+    : `hairstyles/${hairstyleId}/variants/${hairstyleVariantId}`;
+  const pathname = `${directory}/${(options.randomId ?? randomUUID)()}.${extensionFor(input.contentType)}`;
   const signed: SignedIntent = {
     v: UPLOAD_INTENT_VERSION,
     hairstyleId,
+    hairstyleVariantId,
     pathname,
     contentType: input.contentType,
     validUntil,
@@ -132,9 +161,8 @@ function readIntent(clientPayload: unknown, config: BlobStorageConfig): SignedIn
     throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The image upload request is invalid.");
   }
   try {
-    const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Partial<SignedIntent>;
+    const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, unknown>;
     if (
-      decoded.v !== UPLOAD_INTENT_VERSION ||
       typeof decoded.hairstyleId !== "string" ||
       typeof decoded.pathname !== "string" ||
       !isImageContentType(decoded.contentType) ||
@@ -142,7 +170,19 @@ function readIntent(clientPayload: unknown, config: BlobStorageConfig): SignedIn
     ) {
       throw new Error("invalid");
     }
-    return decoded as SignedIntent;
+    if (decoded.v === LEGACY_UPLOAD_INTENT_VERSION) {
+      return {
+        v: LEGACY_UPLOAD_INTENT_VERSION,
+        hairstyleId: decoded.hairstyleId as string,
+        pathname: decoded.pathname as string,
+        contentType: decoded.contentType as HairstyleImageContentType,
+        validUntil: decoded.validUntil as number,
+      };
+    }
+    if (decoded.v === UPLOAD_INTENT_VERSION && (decoded.hairstyleVariantId === null || isVariantId(decoded.hairstyleVariantId))) {
+      return decoded as VariantSignedIntent;
+    }
+    throw new Error("invalid");
   } catch {
     throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The image upload request is invalid.");
   }
@@ -151,19 +191,43 @@ function readIntent(clientPayload: unknown, config: BlobStorageConfig): SignedIn
 export function verifyHairstyleImageUploadIntent(
   clientPayload: unknown,
   config: BlobStorageConfig,
-  expected: { hairstyleId: string; pathname?: string },
+  expected: { hairstyleId: string; hairstyleVariantId?: string | null; pathname?: string },
   options: { now?: number; completion?: boolean } = {},
-): SignedIntent {
+): VerifiedSignedIntent {
   const intent = readIntent(clientPayload, config);
   const now = options.now ?? Date.now();
   const deadline = intent.validUntil + (options.completion ? COMPLETION_GRACE_MS : 0);
   if (now > deadline) {
     throw new HairstyleImageUploadError("UPLOAD_INTENT_EXPIRED", "This image upload authorization has expired.");
   }
-  if (intent.hairstyleId !== expected.hairstyleId || (expected.pathname && intent.pathname !== expected.pathname)) {
+  const hairstyleVariantId = intent.v === LEGACY_UPLOAD_INTENT_VERSION ? null : intent.hairstyleVariantId;
+  if (
+    intent.hairstyleId !== expected.hairstyleId ||
+    (expected.hairstyleVariantId !== undefined && hairstyleVariantId !== expected.hairstyleVariantId) ||
+    (expected.pathname && intent.pathname !== expected.pathname)
+  ) {
     throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The image upload request is invalid.");
   }
-  return intent;
+  return {
+    v: intent.v,
+    hairstyleId: intent.hairstyleId,
+    hairstyleVariantId,
+    pathname: intent.pathname,
+    contentType: intent.contentType,
+    validUntil: intent.validUntil,
+  };
+}
+
+function isVariantId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function normalizeVariantId(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (!isVariantId(value)) {
+    throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The image upload request is invalid.");
+  }
+  return value.trim();
 }
 
 /** Validates provider metadata after an upload, before catalog attachment. */

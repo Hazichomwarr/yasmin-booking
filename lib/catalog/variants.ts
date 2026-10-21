@@ -5,18 +5,25 @@ import { prisma } from "@/lib/prisma";
 import { CatalogError } from "./errors";
 import { isRecordNotFound, isUniqueViolationOn } from "./prisma-errors";
 import { adminHairstyleVariantSelect, variantOrder, type AdminHairstyleVariant } from "./read-shapes";
-import { assertCompleteOrdering, normalizeName, normalizeOptionalPriceCents } from "./validation";
+import {
+  assertCompleteOrdering,
+  normalizeName,
+  normalizeOptionalPriceCents,
+  normalizeOptionalVariantDescription,
+} from "./validation";
 
 /** Current catalog configuration only. Appointment snapshots are never edited here. */
 export type CreateHairstyleVariantInput = {
   hairstyleId: string;
   name: string;
+  description?: string | null;
   priceCents?: number | null;
   isActive?: boolean;
 };
 
 export type UpdateHairstyleVariantInput = {
   name?: string;
+  description?: string | null;
   priceCents?: number | null;
   isActive?: boolean;
 };
@@ -32,6 +39,7 @@ export async function listHairstyleVariantsForAdmin(hairstyleId: string): Promis
 
 export async function createHairstyleVariant(input: CreateHairstyleVariantInput): Promise<AdminHairstyleVariant> {
   const name = normalizeName(input.name, "Variant name");
+  const description = normalizeOptionalVariantDescription(input.description) ?? null;
   const priceCents = normalizeOptionalPriceCents(input.priceCents);
   const isActive = input.isActive ?? true;
   assertActiveVariantPrice(priceCents, isActive);
@@ -40,7 +48,7 @@ export async function createHairstyleVariant(input: CreateHairstyleVariantInput)
       await lockHairstyle(tx, input.hairstyleId);
       const last = await tx.hairstyleVariant.aggregate({ where: { hairstyleId: input.hairstyleId }, _max: { sortOrder: true } });
       return tx.hairstyleVariant.create({
-        data: { hairstyleId: input.hairstyleId, name, priceCents, isActive, sortOrder: (last._max.sortOrder ?? -1) + 1 },
+        data: { hairstyleId: input.hairstyleId, name, description, priceCents, isActive, sortOrder: (last._max.sortOrder ?? -1) + 1 },
         select: adminHairstyleVariantSelect,
       });
     });
@@ -53,6 +61,7 @@ export async function createHairstyleVariant(input: CreateHairstyleVariantInput)
 export async function updateHairstyleVariant(variantId: string, input: UpdateHairstyleVariantInput): Promise<AdminHairstyleVariant> {
   const data = {
     name: input.name === undefined ? undefined : normalizeName(input.name, "Variant name"),
+    description: normalizeOptionalVariantDescription(input.description),
     priceCents: input.priceCents === undefined ? undefined : normalizeOptionalPriceCents(input.priceCents),
     isActive: input.isActive,
   };

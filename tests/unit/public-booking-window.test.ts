@@ -123,4 +123,4 @@ describe("shared public contact rules", () => {
   });
 });
 
-const base = { name: "Amina", email: "a@example.test", phone: "", locationId: "loc", bookingSlotId: "slot", appointmentDate: "2027-03-02" };
+const base = { name: "Amina", email: "a@example.test", phone: "", locationId: "loc", bookingSlotId: "slot", appointmentDate: "2027-03-02", hairstyleId: "style" };

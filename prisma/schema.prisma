@@ -188,6 +188,7 @@ model HairstyleVariant {
   id           String        @id @default(cuid())
   hairstyleId  String
   name         String
+  description  String?
   /// Null means a draft variant, never bookable.
   priceCents   Int?
   isActive     Boolean       @default(true)
@@ -195,26 +196,32 @@ model HairstyleVariant {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   hairstyle    Hairstyle     @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  media        HairstyleMedia[]
   appointments Appointment[]
 
   @@unique([hairstyleId, name])
+  @@unique([id, hairstyleId])
   @@index([hairstyleId, isActive, sortOrder])
 }
 
 model HairstyleMedia {
-  id          String    @id @default(cuid())
-  hairstyleId String
-  type        MediaType
-  storageKey  String    @unique
-  deliveryUrl String?
-  altText     String?
-  caption     String?
-  sortOrder   Int       @default(0)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  hairstyle   Hairstyle @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  id                 String            @id @default(cuid())
+  hairstyleId        String
+  /// Null = service gallery; non-null = the selected variant's gallery.
+  hairstyleVariantId String?
+  type               MediaType
+  storageKey         String            @unique
+  deliveryUrl        String?
+  altText            String?
+  caption            String?
+  sortOrder          Int               @default(0)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  hairstyle          Hairstyle         @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  hairstyleVariant   HairstyleVariant? @relation(fields: [hairstyleVariantId, hairstyleId], references: [id, hairstyleId], onDelete: Restrict)
 
   @@index([hairstyleId, type, sortOrder])
+  @@index([hairstyleVariantId, type, sortOrder])
 }
 
 /// An outbox for physical Blob deletion. Removing media metadata and adding

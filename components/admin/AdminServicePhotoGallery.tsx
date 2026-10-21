@@ -17,8 +17,10 @@ export type ServicePhoto = {
   sortOrder: number;
 };
 
-type UploadRow = { key: string; file: File; previewUrl: string; status: "ready" | "uploading" | "complete" | "failed"; progress: number; message?: string };
-type Intent = { pathname: string; clientPayload: string; uploadUrl: string };
+/** An object already in Blob storage; retries re-confirm it instead of uploading a duplicate. */
+type UploadedObject = { url: string; clientPayload: string; confirmUrl: string };
+type UploadRow = { key: string; file: File; previewUrl: string; status: "ready" | "uploading" | "complete" | "failed"; progress: number; message?: string; uploaded?: UploadedObject };
+type Intent = { pathname: string; clientPayload: string; uploadUrl: string; confirmUrl: string };
 
 const MAX_IMAGES = 8;
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -48,7 +50,17 @@ function RemoveDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm
 }
 
 /** Client-only gallery. Server APIs remain the authority for media ownership and storage lifecycle. */
-export function AdminServicePhotoGallery({ serviceId, media: initialMedia }: { serviceId: string; media: ServicePhoto[] }) {
+export function AdminServicePhotoGallery({
+  serviceId,
+  hairstyleVariantId,
+  variantName,
+  media: initialMedia,
+}: {
+  serviceId: string;
+  hairstyleVariantId?: string;
+  variantName?: string;
+  media: ServicePhoto[];
+}) {
   const router = useRouter();
   const [media, setMedia] = useState(initialMedia);
   const [uploads, setUploads] = useState<UploadRow[]>([]);
@@ -64,7 +76,7 @@ export function AdminServicePhotoGallery({ serviceId, media: initialMedia }: { s
 
   const photos = useMemo(() => media.filter((item) => item.type === "IMAGE").sort((a, b) => a.sortOrder - b.sortOrder), [media]);
   const usableCover = photos.find((item) => item.deliveryUrl !== null)?.id ?? null;
-  const available = MAX_IMAGES - photos.length - uploads.filter((row) => row.status !== "failed").length;
+  const available = MAX_IMAGES - photos.length - uploads.filter((row) => row.status === "ready" || row.status === "uploading").length;
 
   function selectFiles(event: React.ChangeEvent<HTMLInputElement>) {
     const next: UploadRow[] = [];
@@ -84,24 +96,46 @@ export function AdminServicePhotoGallery({ serviceId, media: initialMedia }: { s
     setUploads((current) => current.map((row) => row.key === key ? { ...row, ...update } : row));
   }
 
-  async function uploadOne(row: UploadRow) {
-    updateUpload(row.key, { status: "uploading", progress: 1, message: undefined });
+  async function uploadOne(row: UploadRow): Promise<boolean> {
+    updateUpload(row.key, { status: "uploading", progress: row.uploaded ? 100 : 1, message: undefined });
+    let uploaded = row.uploaded;
     try {
-      const intentResponse = await fetch(`/api/admin/hairstyles/${encodeURIComponent(serviceId)}/media/upload-intent`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contentType: row.file.type }),
+      if (!uploaded) {
+        const intentResponse = await fetch(`/api/admin/hairstyles/${encodeURIComponent(serviceId)}/media/upload-intent`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+            contentType: row.file.type,
+            ...(hairstyleVariantId ? { hairstyleVariantId } : {}),
+          }),
+        });
+        if (!intentResponse.ok) throw new Error(await errorMessage(intentResponse));
+        const intent = await intentResponse.json() as Intent;
+        let blob;
+        try {
+          blob = await upload(intent.pathname, row.file, {
+            access: "public",
+            contentType: row.file.type,
+            handleUploadUrl: intent.uploadUrl,
+            clientPayload: intent.clientPayload,
+            onUploadProgress: ({ percentage }) => updateUpload(row.key, { progress: Math.max(1, Math.round(percentage)) }),
+          });
+        } catch (caught) {
+          throw new Error(`The photo could not be sent to storage${caught instanceof Error && caught.message ? ` (${caught.message})` : ""}. Check your connection and retry.`);
+        }
+        uploaded = { url: blob.url, clientPayload: intent.clientPayload, confirmUrl: intent.confirmUrl };
+        updateUpload(row.key, { uploaded });
+      }
+      // Storage alone is not success: the photo exists only once the server attaches it.
+      const confirmResponse = await fetch(uploaded.confirmUrl, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ clientPayload: uploaded.clientPayload, url: uploaded.url }),
       });
-      if (!intentResponse.ok) throw new Error(await errorMessage(intentResponse));
-      const intent = await intentResponse.json() as Intent;
-      await upload(intent.pathname, row.file, {
-        access: "public",
-        contentType: row.file.type,
-        handleUploadUrl: intent.uploadUrl,
-        clientPayload: intent.clientPayload,
-        onUploadProgress: ({ percentage }) => updateUpload(row.key, { progress: Math.max(1, Math.round(percentage)) }),
-      });
-      updateUpload(row.key, { status: "complete", progress: 100, message: "Attached" });
+      if (!confirmResponse.ok) throw new Error(await errorMessage(confirmResponse));
+      const payload = await confirmResponse.json() as { media: ServicePhoto };
+      setMedia((current) => [...current.filter((item) => item.id !== payload.media.id), payload.media]);
+      updateUpload(row.key, { status: "complete", progress: 100, message: "Attached to gallery" });
+      return true;
     } catch (caught) {
       updateUpload(row.key, { status: "failed", message: caught instanceof Error ? caught.message : "Upload failed." });
+      return false;
     }
   }
 
@@ -109,10 +143,21 @@ export function AdminServicePhotoGallery({ serviceId, media: initialMedia }: { s
     const ready = uploads.filter((row) => row.status === "ready" || row.status === "failed");
     if (!ready.length || busy) return;
     setBusy(true); setError(null); setMessage(null);
-    for (const row of ready) await uploadOne(row);
+    let attached = 0;
+    for (const row of ready) if (await uploadOne(row)) attached += 1;
     setBusy(false);
-    setMessage("Finished processing selected photos.");
-    router.refresh();
+    // Confirmed records are already in local state. Refreshing here would
+    // remount this gallery (its key tracks the media list) and discard any
+    // failed rows the owner still needs to retry.
+    if (attached === ready.length) {
+      setUploads((current) => current.filter((row) => {
+        if (row.status === "complete") URL.revokeObjectURL(row.previewUrl);
+        return row.status !== "complete";
+      }));
+      setMessage(`${attached} ${attached === 1 ? "photo" : "photos"} added to the gallery.`);
+    } else {
+      setError(`${attached} of ${ready.length} photos were added. The failed photos below explain what to do; select “Upload selected photos” to retry them.`);
+    }
   }
 
   async function saveMetadata(photo: ServicePhoto) {
@@ -120,7 +165,13 @@ export function AdminServicePhotoGallery({ serviceId, media: initialMedia }: { s
     setBusy(true); setError(null); setMessage(null);
     try {
       const response = await fetch(`/api/admin/hairstyles/${encodeURIComponent(serviceId)}/media`, {
-        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "metadata", mediaId: photo.id, altText: photo.altText, caption: photo.caption }),
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          kind: "metadata",
+          mediaId: photo.id,
+          altText: photo.altText,
+          caption: photo.caption,
+          ...(hairstyleVariantId ? { hairstyleVariantId } : {}),
+        }),
       });
       if (!response.ok) throw new Error(await errorMessage(response));
       const payload = await response.json() as { media: ServicePhoto };
@@ -142,7 +193,11 @@ export function AdminServicePhotoGallery({ serviceId, media: initialMedia }: { s
         .sort((left, right) => left.sortOrder - right.sortOrder)
         .map((item) => item.type === "IMAGE" ? nextPhotos[photoIndex++]! : item);
       const response = await fetch(`/api/admin/hairstyles/${encodeURIComponent(serviceId)}/media`, {
-        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "order", orderedMediaIds: complete.map((item) => item.id) }),
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          kind: "order",
+          orderedMediaIds: complete.map((item) => item.id),
+          ...(hairstyleVariantId ? { hairstyleVariantId } : {}),
+        }),
       });
       if (!response.ok) throw new Error(await errorMessage(response));
       const payload = await response.json() as { media: ServicePhoto[] };
@@ -165,8 +220,13 @@ export function AdminServicePhotoGallery({ serviceId, media: initialMedia }: { s
     finally { setBusy(false); setRemoving(null); }
   }
 
-  return <section className={styles.photoGallery} aria-labelledby="photos-heading">
-    <div className={styles.variantHeading}><div><p className={styles.eyebrow}>Portfolio</p><h2 id="photos-heading">Photos</h2><p>First ordered photo with a delivery URL is the cover image. Up to {MAX_IMAGES} JPEG, PNG, or WebP images.</p></div><button type="button" className={styles.secondary} onClick={() => input.current?.click()} disabled={busy || available <= 0}>Select photos</button></div>
+  const heading = hairstyleVariantId ? `Photos for ${variantName ?? "this variant"}` : "Service photos";
+  const help = hairstyleVariantId
+    ? "The first photo is this variant's cover. Up to 8 JPEG, PNG, or WebP images."
+    : "Used when a variant has no photos of its own. Up to 8 JPEG, PNG, or WebP images.";
+
+  return <section className={styles.photoGallery} aria-labelledby={`photos-heading-${hairstyleVariantId ?? "service"}`}>
+    <div className={styles.variantHeading}><div><p className={styles.eyebrow}>Portfolio</p><h2 id={`photos-heading-${hairstyleVariantId ?? "service"}`}>{heading}</h2><p>{help}</p></div><button type="button" className={styles.secondary} onClick={() => input.current?.click()} disabled={busy || available <= 0}>Select photos</button></div>
     <input ref={input} className={styles.visuallyHidden} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={selectFiles} disabled={busy || available <= 0} />
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
     {message ? <p className={styles.actionMessage} role="status">{message}</p> : null}

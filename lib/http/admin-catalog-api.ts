@@ -179,9 +179,10 @@ export async function adminCatalogPost(request: Request): Promise<Response> {
     }
     if (
       input.kind === "variant" &&
-      hasOnly(input, ["kind", "hairstyleId", "name", "price", "isActive"]) &&
+      hasOnly(input, ["kind", "hairstyleId", "name", "description", "price", "isActive"]) &&
       typeof input.hairstyleId === "string" &&
       typeof input.name === "string" &&
+      (input.description === undefined || input.description === null || typeof input.description === "string") &&
       (input.isActive === undefined || typeof input.isActive === "boolean")
     ) {
       const hairstyle = await getHairstyleDetailForAdmin(input.hairstyleId);
@@ -189,6 +190,7 @@ export async function adminCatalogPost(request: Request): Promise<Response> {
       const variant = await createHairstyleVariant({
         hairstyleId: input.hairstyleId,
         name: input.name,
+        description: input.description as string | null | undefined,
         priceCents: cents(input.price),
         isActive: input.isActive === true,
       });
@@ -226,9 +228,7 @@ export async function adminCatalogPatch(request: Request, id: string): Promise<R
       (input.description === undefined || typeof input.description === "string") &&
       (input.isActive === undefined || typeof input.isActive === "boolean")
     ) {
-      const current = await getHairstyleDetailForAdmin(id);
       const requiresVariant = input.pricingMode === "variants";
-      if (current.requiresVariant !== requiresVariant) throw new Error("PRICING_MODE_IMMUTABLE");
       const priceCents = requiresVariant ? null : cents(input.price);
       if (!requiresVariant && input.isActive === true && priceCents === null) throw new Error("INVALID_PRICE");
       const service = await updateHairstyle(id, {
@@ -250,9 +250,10 @@ export async function adminCatalogPatch(request: Request, id: string): Promise<R
     }
     if (
       input.kind === "variant" &&
-      hasOnly(input, ["kind", "variantId", "name", "price", "isActive"]) &&
+      hasOnly(input, ["kind", "variantId", "name", "description", "price", "isActive"]) &&
       typeof input.variantId === "string" &&
       (input.name === undefined || typeof input.name === "string") &&
+      (input.description === undefined || input.description === null || typeof input.description === "string") &&
       (input.isActive === undefined || typeof input.isActive === "boolean")
     ) {
       const hairstyle = await getHairstyleDetailForAdmin(id);
@@ -260,7 +261,8 @@ export async function adminCatalogPatch(request: Request, id: string): Promise<R
       return publicJson(200, {
         variant: await updateHairstyleVariantForHairstyle(id, input.variantId, {
           name: typeof input.name === "string" ? input.name : undefined,
-          priceCents: cents(input.price),
+          description: input.description as string | null | undefined,
+          priceCents: input.price === undefined ? undefined : cents(input.price),
           isActive: input.isActive,
         }),
       });

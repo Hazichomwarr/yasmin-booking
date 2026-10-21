@@ -16,6 +16,12 @@ function invalidInput() {
   return publicJson(400, { error: { code: "INVALID_INPUT", message: "The photo change is not valid." } });
 }
 
+function parseGalleryVariantId(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  return undefined;
+}
+
 /** Authenticated parent-scoped gallery mutations; object storage is never touched here. */
 export async function patchHairstyleMediaApi(request: Request, hairstyleId: string): Promise<Response> {
   const config = loadAdminConfig(process.env);
@@ -34,9 +40,11 @@ export async function patchHairstyleMediaApi(request: Request, hairstyleId: stri
   if (!parsed.ok) return invalidInput();
 
   try {
+    const hairstyleVariantId = parseGalleryVariantId(parsed.value.hairstyleVariantId);
+    if (parsed.value.hairstyleVariantId !== undefined && hairstyleVariantId === undefined) return invalidInput();
     if (
       parsed.value.kind === "metadata" &&
-      Object.keys(parsed.value).every((key) => ["kind", "mediaId", "altText", "caption"].includes(key)) &&
+      Object.keys(parsed.value).every((key) => ["kind", "mediaId", "altText", "caption", "hairstyleVariantId"].includes(key)) &&
       typeof parsed.value.mediaId === "string" &&
       (parsed.value.altText === undefined || parsed.value.altText === null || typeof parsed.value.altText === "string") &&
       (parsed.value.caption === undefined || parsed.value.caption === null || typeof parsed.value.caption === "string")
@@ -44,16 +52,16 @@ export async function patchHairstyleMediaApi(request: Request, hairstyleId: stri
       const media = await updateHairstyleMediaMetadata(hairstyleId, parsed.value.mediaId, {
         altText: parsed.value.altText as string | null | undefined,
         caption: parsed.value.caption as string | null | undefined,
-      });
+      }, hairstyleVariantId);
       return publicJson(200, { media });
     }
     if (
       parsed.value.kind === "order" &&
-      Object.keys(parsed.value).every((key) => ["kind", "orderedMediaIds"].includes(key)) &&
+      Object.keys(parsed.value).every((key) => ["kind", "orderedMediaIds", "hairstyleVariantId"].includes(key)) &&
       Array.isArray(parsed.value.orderedMediaIds) &&
       parsed.value.orderedMediaIds.every((id) => typeof id === "string")
     ) {
-      const media = await reorderHairstyleMedia(hairstyleId, parsed.value.orderedMediaIds);
+      const media = await reorderHairstyleMedia(hairstyleId, parsed.value.orderedMediaIds, hairstyleVariantId);
       return publicJson(200, { media });
     }
   } catch (error) {

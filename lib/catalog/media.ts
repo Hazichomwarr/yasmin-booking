@@ -31,7 +31,8 @@ import {
  *   It is the trusted boundary for the future server-side media-ingestion
  *   adapter and requires measured metadata (see media-verification.ts).
  *
- * V1 limits per hairstyle: at most 8 IMAGE and 3 VIDEO records.
+ * Limits apply independently to each gallery: at most 8 IMAGE and 3 VIDEO
+ * records for the service gallery or for each individual variant gallery.
  * VIDEO also requires a verified duration ≤ 30s.
  *
  * Concurrency: attach and reorder lock the parent Hairstyle row
@@ -48,6 +49,8 @@ export const MEDIA_LIMITS: Readonly<Record<MediaType, number>> = {
 
 type MediaMetadataFields = {
   hairstyleId: string;
+  /** Null or omitted means the hairstyle's service-level gallery. */
+  hairstyleVariantId?: string | null;
   storageKey: string;
   deliveryUrl?: string | null;
   altText?: string | null;
@@ -84,12 +87,23 @@ export type UpdateHairstyleMediaMetadataInput = {
   caption?: string | null;
 };
 
-export async function listHairstyleMedia(hairstyleId: string): Promise<AdminMedia[]> {
+export async function listHairstyleMedia(
+  hairstyleId: string,
+  hairstyleVariantId?: string | null,
+): Promise<AdminMedia[]> {
+  const normalizedVariantId = normalizeGalleryVariantId(hairstyleVariantId);
   const hairstyle = await prisma.hairstyle.findUnique({
     where: { id: hairstyleId },
-    select: { media: { select: adminMediaSelect, orderBy: mediaOrder } },
+    select: {
+      media: {
+        where: { hairstyleVariantId: normalizedVariantId },
+        select: adminMediaSelect,
+        orderBy: mediaOrder,
+      },
+    },
   });
   if (!hairstyle) throw hairstyleNotFound(hairstyleId);
+  await assertVariantBelongsToHairstyle(prisma, hairstyleId, normalizedVariantId);
   return hairstyle.media;
 }
 
@@ -122,22 +136,23 @@ export async function attachHairstyleImageIdempotently(
 ): Promise<IdempotentImageAttachment> {
   const storageKey = normalizeStorageKey(input.storageKey);
   const deliveryUrl = normalizeDeliveryUrl(input.deliveryUrl);
+  const hairstyleVariantId = normalizeGalleryVariantId(input.hairstyleVariantId);
 
   const existing = await prisma.hairstyleMedia.findUnique({
     where: { storageKey },
     select: adminMediaSelect,
   });
-  if (existing) return existingImageAttachment(existing, input.hairstyleId, deliveryUrl);
+  if (existing) return existingImageAttachment(existing, input.hairstyleId, hairstyleVariantId, deliveryUrl);
 
   try {
-    return { media: await attachHairstyleImage({ ...input, storageKey, deliveryUrl }), created: true };
+    return { media: await attachHairstyleImage({ ...input, hairstyleVariantId, storageKey, deliveryUrl }), created: true };
   } catch (error) {
     if (!isUniqueViolationOn(error, "storageKey")) throw error;
     const afterRace = await prisma.hairstyleMedia.findUnique({
       where: { storageKey },
       select: adminMediaSelect,
     });
-    if (afterRace) return existingImageAttachment(afterRace, input.hairstyleId, deliveryUrl);
+    if (afterRace) return existingImageAttachment(afterRace, input.hairstyleId, hairstyleVariantId, deliveryUrl);
     throw error;
   }
 }
@@ -145,10 +160,12 @@ export async function attachHairstyleImageIdempotently(
 function existingImageAttachment(
   existing: AdminMedia,
   hairstyleId: string,
+  hairstyleVariantId: string | null,
   deliveryUrl: string | null,
 ): IdempotentImageAttachment {
   if (
     existing.hairstyleId === hairstyleId &&
+    existing.hairstyleVariantId === hairstyleVariantId &&
     existing.type === "IMAGE" &&
     existing.deliveryUrl === deliveryUrl
   ) {
@@ -181,6 +198,7 @@ async function insertMediaWithinLimit(
 ): Promise<AdminMedia> {
   const data = {
     hairstyleId: input.hairstyleId,
+    hairstyleVariantId: normalizeGalleryVariantId(input.hairstyleVariantId),
     type,
     storageKey: normalizeStorageKey(input.storageKey),
     deliveryUrl: normalizeDeliveryUrl(input.deliveryUrl),
@@ -191,9 +209,10 @@ async function insertMediaWithinLimit(
   try {
     return await prisma.$transaction(async (tx) => {
       await lockHairstyle(tx, data.hairstyleId);
+      await assertVariantBelongsToHairstyle(tx, data.hairstyleId, data.hairstyleVariantId);
 
       const existingOfType = await tx.hairstyleMedia.count({
-        where: { hairstyleId: data.hairstyleId, type },
+        where: { hairstyleId: data.hairstyleId, hairstyleVariantId: data.hairstyleVariantId, type },
       });
       const limit = MEDIA_LIMITS[type];
       if (existingOfType >= limit) {
@@ -204,7 +223,7 @@ async function insertMediaWithinLimit(
       }
 
       const last = await tx.hairstyleMedia.aggregate({
-        where: { hairstyleId: data.hairstyleId },
+        where: { hairstyleId: data.hairstyleId, hairstyleVariantId: data.hairstyleVariantId },
         _max: { sortOrder: true },
       });
 
@@ -225,25 +244,27 @@ async function insertMediaWithinLimit(
 }
 
 /**
- * Sets the complete media order of one hairstyle. `orderedMediaIds` must list
- * every media record of that hairstyle exactly once; media belonging to
- * another hairstyle is rejected and never modified.
+ * Sets the complete media order of one service or variant gallery.
+ * `orderedMediaIds` must list every record in that exact gallery once.
  */
 export async function reorderHairstyleMedia(
   hairstyleId: string,
   orderedMediaIds: string[],
+  hairstyleVariantId?: string | null,
 ): Promise<AdminMedia[]> {
+  const normalizedVariantId = normalizeGalleryVariantId(hairstyleVariantId);
   await prisma.$transaction(async (tx) => {
     await lockHairstyle(tx, hairstyleId);
+    await assertVariantBelongsToHairstyle(tx, hairstyleId, normalizedVariantId);
 
     const existing = await tx.hairstyleMedia.findMany({
-      where: { hairstyleId },
+      where: { hairstyleId, hairstyleVariantId: normalizedVariantId },
       select: { id: true, sortOrder: true },
     });
     assertCompleteOrdering(
       orderedMediaIds,
       existing.map((media) => media.id),
-      `hairstyle ${hairstyleId}`,
+      normalizedVariantId ? `variant ${normalizedVariantId}` : `hairstyle ${hairstyleId}`,
     );
 
     const currentOrder = new Map(existing.map((m) => [m.id, m.sortOrder]));
@@ -253,7 +274,7 @@ export async function reorderHairstyleMedia(
     }
   });
 
-  return listHairstyleMedia(hairstyleId);
+  return listHairstyleMedia(hairstyleId, normalizedVariantId);
 }
 
 /**
@@ -264,7 +285,9 @@ export async function updateHairstyleMediaMetadata(
   hairstyleId: string,
   mediaId: string,
   input: UpdateHairstyleMediaMetadataInput,
+  hairstyleVariantId?: string | null,
 ): Promise<AdminMedia> {
+  const normalizedVariantId = normalizeGalleryVariantId(hairstyleVariantId);
   const altText = normalizeOptionalText(input.altText);
   const caption = normalizeOptionalText(input.caption);
   if (altText === undefined && caption === undefined) {
@@ -272,8 +295,9 @@ export async function updateHairstyleMediaMetadata(
   }
   return prisma.$transaction(async (tx) => {
     await lockHairstyle(tx, hairstyleId);
+    await assertVariantBelongsToHairstyle(tx, hairstyleId, normalizedVariantId);
     const media = await tx.hairstyleMedia.findFirst({
-      where: { id: mediaId, hairstyleId },
+      where: { id: mediaId, hairstyleId, hairstyleVariantId: normalizedVariantId },
       select: { id: true },
     });
     if (!media) throw new CatalogError("MEDIA_NOT_FOUND", `Media ${mediaId} does not belong to this hairstyle.`);
@@ -321,6 +345,30 @@ async function lockHairstyle(tx: Prisma.TransactionClient, hairstyleId: string) 
     SELECT "id" FROM "Hairstyle" WHERE "id" = ${hairstyleId} FOR UPDATE
   `;
   if (locked.length === 0) throw hairstyleNotFound(hairstyleId);
+}
+
+/** A variant gallery is valid only for a variant owned by the locked hairstyle. */
+async function assertVariantBelongsToHairstyle(
+  client: Pick<Prisma.TransactionClient, "hairstyleVariant">,
+  hairstyleId: string,
+  hairstyleVariantId: string | null,
+) {
+  if (hairstyleVariantId === null) return;
+  const variant = await client.hairstyleVariant.findFirst({
+    where: { id: hairstyleVariantId, hairstyleId },
+    select: { id: true },
+  });
+  if (!variant) {
+    throw new CatalogError("VARIANT_NOT_FOUND", "The selected hairstyle variant does not belong to this hairstyle.");
+  }
+}
+
+function normalizeGalleryVariantId(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new CatalogError("INVALID_MEDIA", "Variant gallery ownership must be a valid variant ID.");
+  }
+  return value.trim();
 }
 
 function hairstyleNotFound(hairstyleId: string) {
