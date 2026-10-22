@@ -32,6 +32,7 @@ export function useCleanTestDatabase() {
       TRUNCATE "StripeWebhookEvent", "PaymentProcessingException", "RateLimitCounter", "MarketingConsentEvent",
                "AppointmentEvent", "Payment", "Appointment", "Customer",
                "BookingSlot", "SalonLocation",
+               "HomepageCatalogFeature",
                "HairstyleMediaCleanupTask", "HairstyleMedia", "HairstyleVariant", "Hairstyle", "HairstyleCategory",
                "AdminSession", "AdminUser"
       CASCADE

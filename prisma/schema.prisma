@@ -187,6 +187,7 @@ model Hairstyle {
   mediaCleanupTasks HairstyleMediaCleanupTask[]
   variants          HairstyleVariant[]
   appointments      Appointment[]
+  homepageFeatures HomepageCatalogFeature[]
 
   @@index([categoryId, isActive, sortOrder])
 }
@@ -205,10 +206,30 @@ model HairstyleVariant {
   hairstyle    Hairstyle     @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
   media        HairstyleMedia[]
   appointments Appointment[]
+  homepageFeatures HomepageCatalogFeature[]
 
   @@unique([hairstyleId, name])
   @@unique([id, hairstyleId])
   @@index([hairstyleId, isActive, sortOrder])
+}
+
+/// Explicit homepage curation. Names, prices, and media remain authoritative
+/// on the referenced catalog records; this table stores only target identity
+/// and homepage-specific presentation order.
+model HomepageCatalogFeature {
+  id                 String            @id @default(cuid())
+  hairstyleId        String
+  hairstyleVariantId String?
+  sortOrder          Int               @default(0)
+  isActive           Boolean           @default(true)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  hairstyle          Hairstyle         @relation(fields: [hairstyleId], references: [id], onDelete: Restrict)
+  hairstyleVariant   HairstyleVariant? @relation(fields: [hairstyleVariantId, hairstyleId], references: [id, hairstyleId], onDelete: Restrict)
+
+  @@index([isActive, sortOrder, createdAt, id])
+  @@index([hairstyleId])
+  @@index([hairstyleVariantId])
 }
 
 model HairstyleMedia {

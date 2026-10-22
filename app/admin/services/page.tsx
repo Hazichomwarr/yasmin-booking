@@ -1,8 +1,9 @@
 import Link from "next/link";
 
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminHomepageFeatures } from "@/components/admin/AdminHomepageFeatures";
 import styles from "@/components/admin/Admin.module.css";
-import { listAdminCatalog } from "@/lib/admin/catalog";
+import { getAdminHomepageFeatures, listAdminCatalog } from "@/lib/admin/catalog";
 import { requireAdmin } from "@/lib/admin/dal";
 
 function dollars(cents: number | null) {
@@ -14,13 +15,17 @@ export default async function AdminServicesPage({ searchParams }: { searchParams
   const query = await searchParams;
   const categoryId = typeof query.category === "string" ? query.category : undefined;
   const state = query.state === "active" || query.state === "inactive" || query.state === "draft" ? query.state : undefined;
-  const { categories, hairstyles } = await listAdminCatalog(access, { categoryId, state });
+  const [{ categories, hairstyles }, homepageFeatures] = await Promise.all([
+    listAdminCatalog(access, { categoryId, state }),
+    getAdminHomepageFeatures(access),
+  ]);
 
   return <AdminShell current="services" email={access.email}>
     <div className={styles.catalogHeading}>
       <div><p className={styles.eyebrow}>Catalog</p><h1 className={styles.title}>Services</h1></div>
       <Link className={styles.primary} href="/admin/services/new">Add Service</Link>
     </div>
+    <AdminHomepageFeatures initialState={homepageFeatures} />
     <section className={styles.panel} aria-label="Service filters">
       <form className={styles.filters} method="get">
         <label>Category<select name="category" defaultValue={categoryId ?? ""}><option value="">All categories</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>

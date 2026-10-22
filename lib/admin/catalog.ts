@@ -5,6 +5,10 @@ import {
   type AdminCategory,
   type AdminHairstyle,
   type AdminHairstyleDetail,
+  readHomepageFeatureAdminState,
+  replaceHomepageFeatures,
+  type AdminHomepageFeatureState,
+  type HomepageFeatureTarget,
 } from "@/lib/catalog";
 
 import { assertAdminAccess, type AdminAccess } from "./auth";
@@ -35,4 +39,19 @@ export async function getAdminHairstyleDetail(
 ): Promise<AdminHairstyleDetail> {
   assertAdminAccess(access);
   return getHairstyleDetailForAdmin(hairstyleId);
+}
+
+export async function getAdminHomepageFeatures(access: AdminAccess): Promise<AdminHomepageFeatureState> {
+  assertAdminAccess(access);
+  return readHomepageFeatureAdminState();
+}
+
+export async function setAdminHomepageFeatures(
+  access: AdminAccess,
+  targets: HomepageFeatureTarget[],
+  expectedRevision: string,
+): Promise<AdminHomepageFeatureState> {
+  assertAdminAccess(access);
+  await replaceHomepageFeatures(targets, expectedRevision);
+  return readHomepageFeatureAdminState();
 }

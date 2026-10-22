@@ -311,6 +311,42 @@
 .badge[data-catalog-state="draft"] { background: #fff4dc; color: #8a5a00; }
 .badge[data-catalog-state="inactive"] { background: #f1f0f0; color: #5d5a5b; }
 
+.featureManager { margin-top: 24px; }
+.featureManagerHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.featureManagerHeading h2 { margin: 2px 0 7px; }
+.featureManagerHeading .muted { margin: 0; max-width: 680px; line-height: 1.5; }
+.featureCount { flex: 0 0 auto; padding: 7px 11px; border-radius: 999px; background: #fce8ee; color: #a91f4d; font-size: .78rem; font-weight: 800; }
+.featureEmpty { margin: 0 0 18px; padding: 16px; border-radius: 12px; background: #fff7f5; color: #766b6e; line-height: 1.5; }
+.featureList { display: grid; gap: 10px; margin: 0 0 18px; padding: 0; list-style: none; }
+.featureItem { min-width: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 11px; border: 1px solid #eedfd8; border-radius: 14px; background: #fff; }
+.featureThumb { position: relative; width: 72px; height: 72px; overflow: hidden; border-radius: 11px; background: #f4d2c5; }
+.featureImage { object-fit: cover; }
+.featureFallback { position: absolute; inset: 0; display: grid; place-items: center; background: linear-gradient(145deg, #c9876d, #f4d2c5); color: #fff; font: 2rem/1 Georgia, serif; }
+.featureIdentity { min-width: 0; display: grid; gap: 3px; }
+.featureIdentity strong, .featureIdentity span, .featureIdentity small { overflow-wrap: anywhere; }
+.featureIdentity span { color: #766b6e; font-size: .78rem; }
+.featureIdentity small { color: #1e6b34; line-height: 1.35; }
+.featureIdentity small[data-feature-status="portfolio-only"] { color: #8a5a00; }
+.featureIdentity small[data-feature-status="unavailable"] { color: #9f1c44; font-weight: 700; }
+.featureActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.featureActions button { min-height: 38px; }
+.dangerText { min-height: 38px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: #9f1c44; cursor: pointer; font: inherit; font-size: .82rem; font-weight: 700; }
+.dangerText:hover, .dangerText:focus-visible { background: #fdecef; }
+.featureAddRow { display: grid; grid-template-columns: minmax(150px, auto) minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.featureAddRow label { font-size: .86rem; font-weight: 700; }
+.featureAddRow select { min-width: 0; min-height: 44px; padding: 0 12px; border: 1px solid #decac5; border-radius: 10px; background: #fff; color: inherit; font: inherit; }
+.featureSaveRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; }
+.featureSaveRow p { margin: 0; }
+
+@media (max-width: 700px) {
+  .featureItem { grid-template-columns: 60px minmax(0, 1fr); }
+  .featureThumb { width: 60px; height: 60px; }
+  .featureActions { grid-column: 1 / -1; justify-content: flex-start; }
+  .featureAddRow { grid-template-columns: 1fr; }
+  .featureSaveRow { align-items: stretch; flex-direction: column; }
+  .featureSaveRow .primary { width: 100%; }
+}
+
 .formIntro { margin: 0 0 22px; color: #766b6e; line-height: 1.5; }
 .serviceForm { display: grid; gap: 18px; }
 .serviceFormGrid { display: grid; gap: 14px; }

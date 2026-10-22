@@ -85,6 +85,18 @@ export {
   type PublicBookableHairstyle,
 } from "./public-catalog";
 
+export {
+  HomepageFeatureError,
+  MAX_HOMEPAGE_FEATURES,
+  listPublicHomepageFeatures,
+  readHomepageFeatureAdminState,
+  replaceHomepageFeatures,
+  type AdminHomepageFeatureOption,
+  type AdminHomepageFeatureState,
+  type HomepageFeatureTarget,
+  type PublicHomepageFeature,
+} from "./homepage-features";
+
 /** The public visibility rule, for other domains (e.g. booking) to reuse. */
 export { isPubliclyVisible, publiclyVisibleHairstyle } from "./read-shapes";
 
