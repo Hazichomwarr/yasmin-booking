@@ -220,14 +220,30 @@ export type PublicHairstyle = {
   slug: string;
   description: string | null;
   category: { name: string; slug: string };
+  requiresVariant: boolean;
+  priceCents: number | null;
+  /** Lowest currently bookable variant price, or the simple service price. */
+  startingPriceCents: number | null;
+  isBookable: boolean;
   /** First deliverable IMAGE in media order, for catalog cards. */
   coverImage: PublicMedia | null;
   /** Ordered service-gallery images. Variant galleries are never mixed in. */
   gallery: PublicMedia[];
 };
 
-export type PublicHairstyleDetail = Omit<PublicHairstyle, "coverImage" | "gallery"> & {
+export type PublicHairstyleDetail = PublicHairstyle & {
+  /** Backward-compatible alias for the service gallery. */
   media: PublicMedia[];
+  variants: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    priceCents: number | null;
+    isBookable: boolean;
+    /** Variant photos when present, otherwise the service-gallery fallback. */
+    gallery: PublicMedia[];
+    coverImage: PublicMedia | null;
+  }>;
 };
 
 export const publicCategorySelect = {

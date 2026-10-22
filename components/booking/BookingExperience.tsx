@@ -36,6 +36,7 @@ type Details = {
 type BookableHairstyle = {
   id: string;
   name: string;
+  slug: string;
   description: string | null;
   category: { id: string; name: string; slug: string };
   requiresVariant: boolean;
@@ -52,7 +53,11 @@ type BookableHairstyle = {
   gallery: PublicHairstyleCoverImage[];
 };
 type CreatedBooking = { totalPriceCents: number; depositAmountCents: number; balanceDueCents: number };
-type Props = { hairstyles: BookableHairstyle[]; consentWording: { email: string; sms: string } };
+type Props = {
+  hairstyles: BookableHairstyle[];
+  initialSelection?: { hairstyleId: string; hairstyleVariantId: string };
+  consentWording: { email: string; sms: string };
+};
 
 const initialDetails: Details = {
   name: "",
@@ -68,18 +73,22 @@ const initialDetails: Details = {
 const FIELD_ORDER: PublicContactField[] = ["name", "email", "phone", "preferredStylistName"];
 const STEP_LABELS = ["Style", "Date & time", "Details", "Review"] as const;
 
-export function BookingExperience({ hairstyles, consentWording }: Props) {
+export function BookingExperience({ hairstyles, initialSelection, consentWording }: Props) {
   const router = useRouter();
   const [availability, setAvailability] = useState<Availability | null>(null);
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [date, setDate] = useState("");
   const [slotId, setSlotId] = useState("");
-  const [details, setDetails] = useState<Details>(initialDetails);
+  const [details, setDetails] = useState<Details>(() => ({ ...initialDetails, ...initialSelection }));
   const [problems, setProblems] = useState<Partial<Record<PublicContactField, string>>>({});
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [createdQuote, setCreatedQuote] = useState<Quote | null>(null);
-  const [activeCategoryId, setActiveCategoryId] = useState(() => hairstyles[0]?.category.id ?? "");
+  const [activeCategoryId, setActiveCategoryId] = useState(() => (
+    hairstyles.find((style) => style.id === initialSelection?.hairstyleId)?.category.id
+      ?? hairstyles[0]?.category.id
+      ?? ""
+  ));
   const [galleryImageIndex, setGalleryImageIndex] = useState(0);
   const submitting = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);

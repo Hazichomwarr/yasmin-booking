@@ -3,6 +3,35 @@ export type BookingStyleSelection = {
   hairstyleVariantId: string;
 };
 
+type DeepLinkStyle = {
+  id: string;
+  slug: string;
+  requiresVariant: boolean;
+  variants: Array<{ id: string }>;
+};
+
+/**
+ * Resolve URL hints only against the server-produced bookable catalog. A
+ * mismatched variant invalidates the whole hint so it cannot redirect a style
+ * selection across catalog ownership boundaries.
+ */
+export function resolveBookingStylePreselection(
+  styles: DeepLinkStyle[],
+  styleSlug: string | undefined,
+  variantId: string | undefined,
+): BookingStyleSelection {
+  const empty = { hairstyleId: "", hairstyleVariantId: "" };
+  if (!styleSlug) return empty;
+
+  const style = styles.find((item) => item.slug === styleSlug.trim().toLowerCase());
+  if (!style) return empty;
+  if (!variantId) return { hairstyleId: style.id, hairstyleVariantId: "" };
+
+  const variant = style.variants.find((item) => item.id === variantId);
+  if (!style.requiresVariant || !variant) return empty;
+  return { hairstyleId: style.id, hairstyleVariantId: variant.id };
+}
+
 export function selectBookingHairstyle(
   current: BookingStyleSelection,
   hairstyleId: string,

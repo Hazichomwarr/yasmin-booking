@@ -31,6 +31,8 @@ type PublicMediaWithOwnership = Prisma.HairstyleMediaGetPayload<{
   select: typeof publicMediaWithOwnershipSelect;
 }>;
 
+const MINIMUM_BOOKABLE_PRICE_CENTS = 4_000;
+
 function publicImagesFrom(
   media: Array<Parameters<typeof toPublicMedia>[0]>,
   options: CoverImageOptions,
@@ -83,7 +85,14 @@ export async function listPublicHairstyles(
       name: true,
       slug: true,
       description: true,
+      requiresVariant: true,
+      priceCents: true,
       category: { select: { name: true, slug: true } },
+      variants: {
+        where: { isActive: true, priceCents: { gte: MINIMUM_BOOKABLE_PRICE_CENTS } },
+        select: { priceCents: true },
+        orderBy: [{ priceCents: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+      },
       media: {
         where: { ...publiclyDeliverableMedia, type: "IMAGE" },
         select: publicMediaSelect,
@@ -94,9 +103,20 @@ export async function listPublicHairstyles(
     orderBy: hairstyleOrder,
   });
 
-  return rows.map(({ media, ...hairstyle }) => {
+  return rows.map(({ media, variants, ...hairstyle }) => {
     const gallery = publicImagesFrom(media, options);
-    return { ...hairstyle, coverImage: gallery[0] ?? null, gallery };
+    const startingPriceCents = hairstyle.requiresVariant
+      ? variants[0]?.priceCents ?? null
+      : hairstyle.priceCents !== null && hairstyle.priceCents >= MINIMUM_BOOKABLE_PRICE_CENTS
+        ? hairstyle.priceCents
+        : null;
+    return {
+      ...hairstyle,
+      startingPriceCents,
+      isBookable: startingPriceCents !== null,
+      coverImage: gallery[0] ?? null,
+      gallery,
+    };
   });
 }
 
@@ -108,6 +128,7 @@ export async function listPublicHairstyles(
 export type PublicBookableHairstyle = {
   id: string;
   name: string;
+  slug: string;
   description: string | null;
   category: { id: string; name: string; slug: string };
   requiresVariant: boolean;
@@ -145,6 +166,7 @@ export async function listPublicBookableHairstyles(
     select: {
       id: true,
       name: true,
+      slug: true,
       description: true,
       requiresVariant: true,
       priceCents: true,
@@ -201,15 +223,64 @@ export async function getPublicHairstyleBySlug(
       name: true,
       slug: true,
       description: true,
+      requiresVariant: true,
+      priceCents: true,
       category: { select: { name: true, slug: true } },
+      variants: {
+        where: { isActive: true },
+        select: { id: true, name: true, description: true, priceCents: true },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      },
       media: {
-        where: publiclyDeliverableMedia,
-        select: publicMediaSelect,
+        where: {
+          deliveryUrl: { not: null },
+          type: "IMAGE",
+          OR: [
+            { hairstyleVariantId: null },
+            { hairstyleVariant: { isActive: true } },
+          ],
+        },
+        select: publicMediaWithOwnershipSelect,
         orderBy: mediaOrder,
       },
     },
   });
   if (!row) return null;
 
-  return { ...row, media: publicImagesFrom(row.media, options) };
+  const serviceGallery = galleryFor(row.media, null, options);
+  const variants = row.variants.map((variant) => {
+    const variantGallery = galleryFor(row.media, variant.id, options);
+    const effectiveGallery = variantGallery.length > 0 ? variantGallery : serviceGallery;
+    return {
+      ...variant,
+      isBookable: variant.priceCents !== null && variant.priceCents >= MINIMUM_BOOKABLE_PRICE_CENTS,
+      gallery: effectiveGallery,
+      coverImage: effectiveGallery[0] ?? null,
+    };
+  });
+  const startingPriceCents = row.requiresVariant
+    ? variants
+        .filter((variant) => variant.isBookable)
+        .reduce<number | null>((lowest, variant) => (
+          lowest === null || (variant.priceCents as number) < lowest ? variant.priceCents as number : lowest
+        ), null)
+    : row.priceCents !== null && row.priceCents >= MINIMUM_BOOKABLE_PRICE_CENTS
+      ? row.priceCents
+      : null;
+
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description,
+    category: row.category,
+    requiresVariant: row.requiresVariant,
+    priceCents: row.priceCents,
+    startingPriceCents,
+    isBookable: startingPriceCents !== null,
+    media: serviceGallery,
+    gallery: serviceGallery,
+    coverImage: serviceGallery[0] ?? null,
+    variants,
+  };
 }

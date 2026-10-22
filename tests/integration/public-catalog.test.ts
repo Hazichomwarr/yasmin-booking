@@ -43,11 +43,22 @@ describe("public catalog visibility", { skip: integrationSkip }, () => {
     const variants = await createHairstyle({ categoryId: category.id, name: "Bob", slug: "bob", requiresVariant: true });
     const activeVariant = await createHairstyleVariant({ hairstyleId: variants.id, name: "Medium", priceCents: 22_000 });
 
-    assert.deepEqual((await listPublicHairstyles()).map((style) => style.name), ["Draft", "Silk Press", "Bob"]);
+    const portfolio = await listPublicHairstyles();
+    assert.deepEqual(portfolio.map((style) => style.name), ["Draft", "Silk Press", "Bob"]);
+    assert.deepEqual(portfolio.map((style) => ({
+      name: style.name,
+      isBookable: style.isBookable,
+      startingPriceCents: style.startingPriceCents,
+    })), [
+      { name: "Draft", isBookable: false, startingPriceCents: null },
+      { name: "Silk Press", isBookable: true, startingPriceCents: 18_000 },
+      { name: "Bob", isBookable: true, startingPriceCents: 22_000 },
+    ]);
     assert.deepEqual(await listPublicBookableHairstyles(), [
       {
         id: simple.id,
         name: "Silk Press",
+        slug: "silk-press",
         description: null,
         category: { id: category.id, name: "Braids", slug: "braids" },
         requiresVariant: false,
@@ -59,6 +70,7 @@ describe("public catalog visibility", { skip: integrationSkip }, () => {
       {
         id: variants.id,
         name: "Bob",
+        slug: "bob",
         description: null,
         category: { id: category.id, name: "Braids", slug: "braids" },
         requiresVariant: true,
@@ -247,5 +259,19 @@ describe("public catalog visibility", { skip: integrationSkip }, () => {
     assert.equal(noPhotoStyle.coverImage, null);
     assert.ok(gypsy.gallery.every((image) => !("storageKey" in image)));
     assert.ok(ownGallery.gallery.every((image) => !("storageKey" in image)));
+
+    const detail = await getPublicHairstyleBySlug("gypsy", {
+      isDeliveryUrlAllowed: (url) => url.startsWith(origin),
+    });
+    assert.ok(detail);
+    assert.equal(detail.isBookable, true);
+    assert.equal(detail.startingPriceCents, 24_000);
+    assert.deepEqual(detail.gallery.map((image) => image.id), [serviceCover.id]);
+    assert.deepEqual(detail.variants.map((variant) => variant.id), [ownGalleryVariant.id, fallbackVariant.id]);
+    assert.deepEqual(detail.variants[0]?.gallery.map((image) => image.id), [ownCover.id, ownSecond.id]);
+    assert.deepEqual(detail.variants[1]?.gallery.map((image) => image.id), [serviceCover.id]);
+    assert.equal(detail.variants.some((variant) => variant.id === inactiveVariant.id), false);
+    assert.ok(detail.variants.every((variant) => !("storageKey" in (variant.coverImage ?? {}))));
   });
+
 });

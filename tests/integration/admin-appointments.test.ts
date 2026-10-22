@@ -8,7 +8,7 @@ import { resolveAdminSession, signInAdmin, type AdminAccess } from "@/lib/admin/
 import { provisionAdminPassword } from "@/lib/admin/provision";
 import { getAdminRescheduleAvailability } from "@/lib/admin/reschedule-availability";
 import { isBookingError } from "@/lib/booking/errors";
-import { addSalonDays, salonToday, type SalonDate } from "@/lib/booking/salon-calendar";
+import { addSalonDays, salonToday, salonWeekday, type SalonDate } from "@/lib/booking/salon-calendar";
 import { prisma } from "@/lib/prisma";
 
 import { createAppointmentIn, createLocation } from "../support/booking-fixtures";
@@ -224,7 +224,8 @@ describe("admin appointment reads", { skip: integrationSkip }, () => {
     const access = await adminAccess();
     const { location, slots } = await createLocation({ slots: [{ time: "05:00", capacity: 1 }, { time: "11:00", capacity: 1 }, { time: "14:00", capacity: 1, isActive: false }] });
     const today = salonToday(ADMIN_TIME_ZONE, await databaseNow());
-    const date = addSalonDays(today, 2);
+    let date = addSalonDays(today, 2);
+    while (salonWeekday(date) === 0 || salonWeekday(date) === 6) date = addSalonDays(date, 1);
     const booked = await appointment(slots[0], date, "CONFIRMED");
     await appointment(slots[1], date, "CONFIRMED");
 

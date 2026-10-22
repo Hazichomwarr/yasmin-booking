@@ -23,11 +23,14 @@ export function LandingHeader() {
           />
         </Link>
 
-        <button className={styles.locations} type="button">
-          <LocationIcon />
-          <span>3 Locations</span>
-          <span className={styles.chevron} aria-hidden="true">⌄</span>
-        </button>
+        <div className={styles.actions}>
+          <Link href="/styles" className={styles.stylesLink}>Explore styles</Link>
+          <button className={styles.locations} type="button">
+            <LocationIcon />
+            <span>3 Locations</span>
+            <span className={styles.chevron} aria-hidden="true">⌄</span>
+          </button>
+        </div>
       </div>
     </header>
   );

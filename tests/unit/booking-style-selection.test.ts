@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   requiresVariantSelection,
+  resolveBookingStylePreselection,
   selectGalleryImage,
   selectBookingCategory,
   selectBookingHairstyle,
@@ -52,5 +53,44 @@ describe("booking style selection", () => {
     assert.equal(requiresVariantSelection(true, ""), true);
     assert.equal(requiresVariantSelection(true, "sleek-braided"), false);
     assert.equal(requiresVariantSelection(false, ""), false);
+  });
+
+  it("resolves valid simple and variant booking deep links from the bookable catalog", () => {
+    const styles = [
+      { id: "press-id", slug: "silk-press", requiresVariant: false, variants: [] },
+      {
+        id: "gypsy-id",
+        slug: "gypsy",
+        requiresVariant: true,
+        variants: [{ id: "sleek-id" }, { id: "classic-id" }],
+      },
+    ];
+
+    assert.deepEqual(resolveBookingStylePreselection(styles, "silk-press", undefined), {
+      hairstyleId: "press-id",
+      hairstyleVariantId: "",
+    });
+    assert.deepEqual(resolveBookingStylePreselection(styles, "GYPSY", "sleek-id"), {
+      hairstyleId: "gypsy-id",
+      hairstyleVariantId: "sleek-id",
+    });
+    assert.deepEqual(resolveBookingStylePreselection(styles, "gypsy", undefined), {
+      hairstyleId: "gypsy-id",
+      hairstyleVariantId: "",
+    });
+  });
+
+  it("rejects unknown, incompatible, and cross-style deep-link selections", () => {
+    const styles = [
+      { id: "press-id", slug: "silk-press", requiresVariant: false, variants: [] },
+      { id: "gypsy-id", slug: "gypsy", requiresVariant: true, variants: [{ id: "gypsy-variant" }] },
+      { id: "bob-id", slug: "bob", requiresVariant: true, variants: [{ id: "bob-variant" }] },
+    ];
+    const empty = { hairstyleId: "", hairstyleVariantId: "" };
+
+    assert.deepEqual(resolveBookingStylePreselection(styles, "missing", undefined), empty);
+    assert.deepEqual(resolveBookingStylePreselection(styles, "gypsy", "bob-variant"), empty);
+    assert.deepEqual(resolveBookingStylePreselection(styles, "silk-press", "gypsy-variant"), empty);
+    assert.deepEqual(resolveBookingStylePreselection(styles, undefined, "gypsy-variant"), empty);
   });
 });
