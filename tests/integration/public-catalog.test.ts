@@ -270,8 +270,67 @@ describe("public catalog visibility", { skip: integrationSkip }, () => {
     assert.deepEqual(detail.variants.map((variant) => variant.id), [ownGalleryVariant.id, fallbackVariant.id]);
     assert.deepEqual(detail.variants[0]?.gallery.map((image) => image.id), [ownCover.id, ownSecond.id]);
     assert.deepEqual(detail.variants[1]?.gallery.map((image) => image.id), [serviceCover.id]);
+    assert.deepEqual(detail.variants.map((variant) => variant.hasOwnGallery), [true, false]);
     assert.equal(detail.variants.some((variant) => variant.id === inactiveVariant.id), false);
     assert.ok(detail.variants.every((variant) => !("storageKey" in (variant.coverImage ?? {}))));
+  });
+
+  it("falls every variant back to the service cover until each variant has its own photos", async () => {
+    const category = await createCategory({ name: "Braids", slug: "braids" });
+    const hairstyle = await createHairstyle({
+      categoryId: category.id,
+      name: "Gypsy",
+      slug: "gypsy",
+      requiresVariant: true,
+    });
+    const sleek = await createHairstyleVariant({ hairstyleId: hairstyle.id, name: "Sleek Braided", priceCents: 24_000 });
+    const gypsy = await createHairstyleVariant({ hairstyleId: hairstyle.id, name: "Gypsy", priceCents: 26_000 });
+    // Mirrors the reported data: both looks were uploaded to the service gallery.
+    const sleekPhoto = await attachHairstyleImage({
+      hairstyleId: hairstyle.id,
+      storageKey: "service/sleek.jpg",
+      deliveryUrl: "https://cdn.example/service/sleek.jpg",
+    });
+    const gypsyPhoto = await attachHairstyleImage({
+      hairstyleId: hairstyle.id,
+      storageKey: "service/gypsy.jpg",
+      deliveryUrl: "https://cdn.example/service/gypsy.jpg",
+    });
+
+    const before = await getPublicHairstyleBySlug("gypsy");
+    assert.ok(before);
+    assert.deepEqual(before.gallery.map((image) => image.id), [sleekPhoto.id, gypsyPhoto.id]);
+    assert.deepEqual(before.variants.map((variant) => variant.coverImage?.id), [sleekPhoto.id, sleekPhoto.id]);
+    assert.deepEqual(before.variants.map((variant) => variant.hasOwnGallery), [false, false]);
+
+    const gypsyCover = await attachHairstyleImage({
+      hairstyleId: hairstyle.id,
+      hairstyleVariantId: gypsy.id,
+      storageKey: "variant/gypsy-1.jpg",
+      deliveryUrl: "https://cdn.example/variant/gypsy-1.jpg",
+    });
+    const gypsySecond = await attachHairstyleImage({
+      hairstyleId: hairstyle.id,
+      hairstyleVariantId: gypsy.id,
+      storageKey: "variant/gypsy-2.jpg",
+      deliveryUrl: "https://cdn.example/variant/gypsy-2.jpg",
+    });
+
+    const after = await getPublicHairstyleBySlug("gypsy");
+    assert.ok(after);
+    assert.deepEqual(after.gallery.map((image) => image.id), [sleekPhoto.id, gypsyPhoto.id]);
+    const [sleekAfter, gypsyAfter] = after.variants;
+    assert.equal(sleekAfter?.id, sleek.id);
+    assert.equal(sleekAfter?.coverImage?.id, sleekPhoto.id);
+    assert.equal(sleekAfter?.hasOwnGallery, false);
+    assert.deepEqual(gypsyAfter?.gallery.map((image) => image.id), [gypsyCover.id, gypsySecond.id]);
+    assert.equal(gypsyAfter?.hasOwnGallery, true);
+    assert.deepEqual(after.variants.map((variant) => [variant.priceCents, variant.isBookable]), [[24_000, true], [26_000, true]]);
+
+    await reorderHairstyleMedia(hairstyle.id, [gypsySecond.id, gypsyCover.id], gypsy.id);
+    const reordered = await getPublicHairstyleBySlug("gypsy");
+    assert.equal(reordered?.variants[1]?.coverImage?.id, gypsySecond.id);
+    assert.deepEqual(reordered?.gallery.map((image) => image.id), [sleekPhoto.id, gypsyPhoto.id]);
   });
 
 });

@@ -243,6 +243,8 @@ export type PublicHairstyleDetail = PublicHairstyle & {
     /** Variant photos when present, otherwise the service-gallery fallback. */
     gallery: PublicMedia[];
     coverImage: PublicMedia | null;
+    /** True only when `gallery` is the variant's own photos, not the fallback. */
+    hasOwnGallery: boolean;
   }>;
 };
 

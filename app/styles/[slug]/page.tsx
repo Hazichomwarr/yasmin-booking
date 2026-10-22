@@ -3,8 +3,8 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 
 import { PublicCatalogHeader } from "@/components/catalog/PublicCatalogHeader";
-import { PublicHairstyleCover } from "@/components/catalog/PublicHairstyleCover";
-import { getPublicHairstyleBySlug, type PublicMedia } from "@/lib/catalog";
+import { PublicImageGallery } from "@/components/catalog/PublicImageGallery";
+import { getPublicHairstyleBySlug } from "@/lib/catalog";
 import { isApprovedBlobDeliveryUrl } from "@/lib/media/blob-public-origin";
 
 import styles from "../styles.module.css";
@@ -30,7 +30,13 @@ export default async function StyleDetailPage({ params }: DetailPageProps) {
       <div className={styles.detailShell}>
         <Link href="/styles" className={styles.back}>← All styles</Link>
         <section className={styles.detailHero}>
-          <Gallery images={hairstyle.gallery} name={hairstyle.name} />
+          <PublicImageGallery
+            images={hairstyle.gallery}
+            hairstyleName={hairstyle.name}
+            mainSizes="(max-width: 950px) 92vw, 45vw"
+            thumbSizes="88px"
+            classNames={heroGalleryClasses}
+          />
           <div className={styles.detailCopy}>
             <p className={styles.eyebrow}>{hairstyle.category.name}</p>
             <h1>{hairstyle.name}</h1>
@@ -57,15 +63,14 @@ export default async function StyleDetailPage({ params }: DetailPageProps) {
             <div className={styles.variantGrid}>
               {hairstyle.variants.map((variant) => (
                 <article key={variant.id} className={styles.variantCard}>
-                  <div className={styles.variantImage}>
-                    <PublicHairstyleCover
-                      image={variant.coverImage}
-                      hairstyleName={`${hairstyle.name} ${variant.name}`}
-                      sizes="(max-width: 700px) 92vw, 42vw"
-                      className={styles.image}
-                      fallbackClassName={styles.fallback}
-                    />
-                  </div>
+                  {/* Only a variant's own photos are browsable; the service fallback is already in the hero. */}
+                  <PublicImageGallery
+                    images={variant.hasOwnGallery ? variant.gallery : variant.gallery.slice(0, 1)}
+                    hairstyleName={`${hairstyle.name} ${variant.name}`}
+                    mainSizes="(max-width: 950px) 92vw, 20vw"
+                    thumbSizes="56px"
+                    classNames={variantGalleryClasses}
+                  />
                   <div className={styles.variantBody}>
                     <div><h3>{variant.name}</h3><p>{variant.description || `A ${hairstyle.name} option prepared with Yasmin's signature finish.`}</p></div>
                     {variant.isBookable && variant.priceCents !== null ? (
@@ -85,18 +90,19 @@ export default async function StyleDetailPage({ params }: DetailPageProps) {
   );
 }
 
-function Gallery({ images, name }: { images: PublicMedia[]; name: string }) {
-  const shown = images.slice(0, 3);
-  if (shown.length === 0) {
-    return <div className={styles.detailGallery}><div className={styles.galleryMain}><PublicHairstyleCover image={null} hairstyleName={name} sizes="60vw" fallbackClassName={styles.fallback} /></div></div>;
-  }
-  return (
-    <div className={`${styles.detailGallery} ${shown.length > 1 ? styles.hasThumbnails : ""}`}>
-      {shown.map((image, index) => (
-        <div key={image.id} className={index === 0 ? styles.galleryMain : styles.galleryThumb}>
-          <PublicHairstyleCover image={image} hairstyleName={name} sizes={index === 0 ? "(max-width: 800px) 92vw, 45vw" : "18vw"} className={styles.image} fallbackClassName={styles.fallback} />
-        </div>
-      ))}
-    </div>
-  );
-}
+const heroGalleryClasses = {
+  root: styles.detailGallery,
+  main: styles.galleryMain,
+  image: styles.image,
+  fallback: styles.fallback,
+  thumbs: styles.galleryThumbs,
+  thumb: styles.galleryThumb,
+  thumbActive: styles.thumbActive,
+};
+
+const variantGalleryClasses = {
+  ...heroGalleryClasses,
+  root: styles.variantMedia,
+  main: styles.variantImage,
+  thumbs: styles.variantThumbs,
+};

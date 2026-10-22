@@ -34,10 +34,16 @@
 .detailShell { width: min(calc(100% - 48px), var(--content-max)); margin: 0 auto; padding: 42px 0 110px; }
 .back { display: inline-block; margin-bottom: 28px; color: #725f65; font-size: 14px; font-weight: 700; }
 .detailHero { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(320px, .88fr); align-items: center; gap: clamp(40px, 7vw, 90px); }
-.detailGallery { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 12px; }
-.detailGallery.hasThumbnails { grid-template-columns: minmax(0, 3fr) minmax(110px, 1fr); grid-template-rows: repeat(2, 1fr); }
-.galleryMain { min-height: 560px; border-radius: 28px; grid-row: 1 / span 2; }
-.galleryThumb { min-height: 0; border-radius: 18px; }
+.detailGallery { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; }
+.galleryMain { min-height: 560px; border-radius: 28px; }
+.galleryThumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 88px)); gap: 10px; }
+.variantThumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 56px)); gap: 8px; padding: 0 12px 12px; }
+.galleryThumb { position: relative; aspect-ratio: 1; overflow: hidden; border: 0; border-radius: 16px; padding: 0; background: #f3dfda; cursor: pointer; opacity: .7; transition: opacity .2s ease, box-shadow .2s ease; }
+.variantThumbs .galleryThumb { border-radius: 12px; }
+.galleryThumb:hover { opacity: 1; }
+.galleryThumb:focus-visible { outline: 3px solid var(--color-rose); outline-offset: 3px; }
+.galleryThumb.thumbActive { opacity: 1; box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--color-rose); }
+.variantMedia { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
 .detailCopy h1 { font-size: clamp(48px, 6vw, 80px); line-height: .98; }
 .detailDescription { margin: 24px 0 30px; color: #725f65; font-size: 17px; line-height: 1.75; }
 .bookingAction { display: flex; align-items: center; justify-content: space-between; gap: 22px; border-top: 1px solid rgba(96,57,62,.13); padding-top: 24px; }
@@ -50,7 +56,7 @@
 .sectionHeading { margin-bottom: 28px; text-align: center; }
 .variantGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .variantCard { display: grid; min-width: 0; grid-template-columns: minmax(180px, .8fr) minmax(0, 1.2fr); overflow: hidden; border: 1px solid rgba(96,57,62,.1); border-radius: 24px; background: #fff; box-shadow: 0 16px 45px rgba(82,48,50,.06); }
-.variantImage { min-height: 320px; }
+.variantImage { flex: 1 0 auto; min-height: 320px; }
 .variantBody { display: flex; flex-direction: column; justify-content: space-between; gap: 22px; padding: 27px; }
 .variantBody h3 { margin: 0 0 10px; font: 500 28px/1.08 Georgia, serif; }
 .variantBody p { color: #76666a; line-height: 1.6; }
@@ -73,9 +79,7 @@
   .cardTitleRow { align-items: baseline; }
   .detailShell { padding-top: 24px; }
   .detailHero { gap: 34px; }
-  .detailGallery.hasThumbnails { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto; }
-  .galleryMain { min-height: 460px; grid-column: 1 / -1; grid-row: auto; }
-  .galleryThumb { aspect-ratio: 1; }
+  .galleryMain { min-height: 460px; }
   .detailDescription { font-size: 16px; }
   .bookingAction, .variantAction { align-items: stretch; flex-direction: column; }
   .bookingAction a, .variantAction a { width: 100%; }

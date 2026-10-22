@@ -15,6 +15,10 @@ type Props = {
   fallbackClassName?: string;
 };
 
+export function publicImageAlt(image: PublicHairstyleCoverImage, hairstyleName: string): string {
+  return image.altText?.trim() || `${hairstyleName} hairstyle`;
+}
+
 /** Public pages pass only pre-validated public delivery URLs to this component. */
 export function PublicHairstyleCover({
   image,
@@ -27,7 +31,7 @@ export function PublicHairstyleCover({
     return (
       <Image
         src={image.deliveryUrl}
-        alt={image.altText?.trim() || `${hairstyleName} hairstyle`}
+        alt={publicImageAlt(image, hairstyleName)}
         fill
         sizes={sizes}
         className={className}

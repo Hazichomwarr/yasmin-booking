@@ -256,6 +256,7 @@ export async function getPublicHairstyleBySlug(
       isBookable: variant.priceCents !== null && variant.priceCents >= MINIMUM_BOOKABLE_PRICE_CENTS,
       gallery: effectiveGallery,
       coverImage: effectiveGallery[0] ?? null,
+      hasOwnGallery: variantGallery.length > 0,
     };
   });
   const startingPriceCents = row.requiresVariant
