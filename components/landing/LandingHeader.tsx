@@ -1,10 +1,35 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 
-import { LocationIcon } from "@/components/ui/icons/LocationIcon";
 import styles from "./LandingHeader.module.css";
 
 export function LandingHeader() {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        menuButtonRef.current?.focus();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [menuOpen]);
+
+  function closeMenu() {
+    setMenuOpen(false);
+  }
+
   return (
     <header className={styles.header}>
       <div className={styles.inner}>
@@ -25,12 +50,33 @@ export function LandingHeader() {
 
         <div className={styles.actions}>
           <Link href="/styles" className={styles.stylesLink}>Explore styles</Link>
-          <button className={styles.locations} type="button">
-            <LocationIcon />
-            <span>3 Locations</span>
-            <span className={styles.chevron} aria-hidden="true">⌄</span>
+          <Link href="/book" className={styles.bookLink}>Book Now</Link>
+          <button
+            aria-controls="mobile-site-navigation"
+            aria-expanded={menuOpen}
+            aria-label={menuOpen ? "Close navigation menu" : "Open navigation menu"}
+            className={styles.menuButton}
+            onClick={() => setMenuOpen((open) => !open)}
+            ref={menuButtonRef}
+            type="button"
+          >
+            <span />
+            <span />
+            <span />
           </button>
         </div>
+
+        {menuOpen ? (
+          <nav
+            aria-label="Mobile navigation"
+            className={styles.mobileMenu}
+            id="mobile-site-navigation"
+          >
+            <Link href="/" onClick={closeMenu}>Home</Link>
+            <Link href="/styles" onClick={closeMenu}>Explore Hairstyles</Link>
+            <Link href="/book" onClick={closeMenu}>Book Now</Link>
+          </nav>
+        ) : null}
       </div>
     </header>
   );

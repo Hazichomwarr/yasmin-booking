@@ -1,6 +1,6 @@
 .signals {
   display: flex;
-  width: min(100%, 550px);
+  width: min(100%, 390px);
   margin-top: 38px;
   justify-content: space-between;
   text-align: center;

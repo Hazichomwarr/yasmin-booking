@@ -28,7 +28,7 @@ export function HeroSection() {
 
           <h1 className={styles.title}>
             Yasmin’s
-            <span>Booking System</span>
+            <span>Beauty Salon</span>
           </h1>
 
           <p className={styles.intro}>
