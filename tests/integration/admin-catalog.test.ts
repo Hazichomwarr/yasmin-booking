@@ -8,7 +8,7 @@ import { isBookingError } from "@/lib/booking/errors";
 import { resolveCatalogBookingPrice } from "@/lib/booking/pricing";
 import { createPublicBooking } from "@/lib/booking/public-booking";
 import { listPublicBookableHairstyles } from "@/lib/catalog";
-import { adminCatalogPatch, adminCatalogPost } from "@/lib/http/admin-catalog-api";
+import { adminCategoriesPut, adminCategoryPatch, adminCatalogPatch, adminCatalogPost } from "@/lib/http/admin-catalog-api";
 import { prisma } from "@/lib/prisma";
 
 import { publicBookingPlace, upcomingPublicBookingDate } from "../support/booking-fixtures";
@@ -41,6 +41,22 @@ async function patch(serviceId: string, body: unknown, token: string) {
     body: JSON.stringify(body),
   });
   return adminCatalogPatch(request, serviceId);
+}
+
+async function patchCategory(categoryId: string, body: unknown, token?: string, origin = ORIGIN) {
+  return adminCategoryPatch(new Request(`${ORIGIN}/api/admin/categories/${categoryId}`, {
+    method: "PATCH",
+    headers: { origin, "content-type": "application/json", ...(token ? { cookie: `${ADMIN_COOKIE_NAME}=${token}` } : {}) },
+    body: JSON.stringify(body),
+  }), categoryId);
+}
+
+async function reorderCategories(orderedCategoryIds: string[], token?: string) {
+  return adminCategoriesPut(new Request(`${ORIGIN}/api/admin/categories`, {
+    method: "PUT",
+    headers: { origin: ORIGIN, "content-type": "application/json", ...(token ? { cookie: `${ADMIN_COOKIE_NAME}=${token}` } : {}) },
+    body: JSON.stringify({ kind: "categories-order", orderedCategoryIds }),
+  }));
 }
 
 async function signedIn() {
@@ -141,6 +157,59 @@ describe("admin catalog mutations", { skip: integrationSkip }, () => {
     assert.equal(unpublished.status, 200);
     await assert.rejects(resolveCatalogBookingPrice(prisma, { hairstyleId: active.id }), (error: unknown) => isBookingError(error));
     assert.equal((await prisma.hairstyle.findUniqueOrThrow({ where: { id: draft.id } })).isActive, false);
+  });
+
+  it("authenticates category management and preserves child relationships through edits, ordering, and deactivation", async () => {
+    const denied = await patchCategory("missing", { kind: "category", name: "No access" });
+    assert.equal(denied.status, 401);
+    assert.equal((await reorderCategories([], undefined)).status, 401);
+
+    const token = await signedIn();
+    const crossOrigin = await patchCategory("missing", { kind: "category", name: "No access" }, token, "https://other.example.test");
+    assert.equal(crossOrigin.status, 403);
+
+    const invalid = await adminCatalogPost(request({ kind: "category", name: "x".repeat(121), slug: "too-long" }, { token }));
+    assert.equal(invalid.status, 400);
+    assert.equal(await prisma.hairstyleCategory.count(), 0);
+
+    const braidsResponse = await adminCatalogPost(request({ kind: "category", name: "Braids", slug: "braids", description: "Original", isActive: true }, { token }));
+    const braids = (await responseJson(braidsResponse)).category as { id: string };
+    const locsResponse = await adminCatalogPost(request({ kind: "category", name: "Locs", slug: "locs", isActive: false }, { token }));
+    const locs = (await responseJson(locsResponse)).category as { id: string };
+    assert.equal(braidsResponse.status, 201);
+    assert.equal(locsResponse.status, 201);
+
+    const duplicate = await adminCatalogPost(request({ kind: "category", name: "Other braids", slug: "braids" }, { token }));
+    assert.equal(duplicate.status, 400);
+    assert.match(String(((await responseJson(duplicate)).error as { message: string }).message), /already uses that slug/i);
+    assert.equal(await prisma.hairstyleCategory.count(), 2);
+
+    const service = await createService(token, { name: "Knotless", categoryId: braids.id, pricingMode: "simple", price: "200.00", isActive: true });
+    const edited = await patchCategory(braids.id, { kind: "category", name: "Braided styles", slug: "braided-styles", description: "  Braids and protective styles  ", isActive: true }, token);
+    const editedCategory = (await responseJson(edited)).category as { id: string; name: string; description: string; hairstyleCount: number };
+    assert.equal(edited.status, 200);
+    assert.deepEqual(
+      { id: editedCategory.id, name: editedCategory.name, description: editedCategory.description, hairstyleCount: editedCategory.hairstyleCount },
+      { id: braids.id, name: "Braided styles", description: "Braids and protective styles", hairstyleCount: 1 },
+    );
+
+    const slugConflict = await patchCategory(locs.id, { kind: "category", slug: "braided-styles" }, token);
+    assert.equal(slugConflict.status, 400);
+    assert.equal((await prisma.hairstyleCategory.findUniqueOrThrow({ where: { id: locs.id } })).slug, "locs");
+
+    const reordered = await reorderCategories([locs.id, braids.id], token);
+    assert.equal(reordered.status, 200);
+    assert.deepEqual((await prisma.hairstyleCategory.findMany({ orderBy: { sortOrder: "asc" }, select: { id: true } })).map(({ id }) => id), [locs.id, braids.id]);
+
+    const deactivated = await patchCategory(braids.id, { kind: "category", isActive: false }, token);
+    assert.equal(deactivated.status, 200);
+    assert.equal((await prisma.hairstyle.findUniqueOrThrow({ where: { id: service.id } })).isActive, true);
+    assert.equal((await listPublicBookableHairstyles()).some((style) => style.id === service.id), false);
+
+    const reactivated = await patchCategory(braids.id, { kind: "category", isActive: true }, token);
+    assert.equal(reactivated.status, 200);
+    assert.equal((await prisma.hairstyle.findUniqueOrThrow({ where: { id: service.id } })).categoryId, braids.id);
+    assert.equal((await listPublicBookableHairstyles()).some((style) => style.id === service.id), true);
   });
 
   it("creates, publishes, updates, orders, and scopes variant services", async () => {

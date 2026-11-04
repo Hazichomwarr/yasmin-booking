@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { AdminShell } from "@/components/admin/AdminShell";
 import { AdminHomepageFeatures } from "@/components/admin/AdminHomepageFeatures";
+import { AdminCategoryManager } from "@/components/admin/AdminCategoryManager";
 import styles from "@/components/admin/Admin.module.css";
 import { getAdminHomepageFeatures, listAdminCatalog } from "@/lib/admin/catalog";
 import { requireAdmin } from "@/lib/admin/dal";
@@ -25,6 +26,7 @@ export default async function AdminServicesPage({ searchParams }: { searchParams
       <div><p className={styles.eyebrow}>Catalog</p><h1 className={styles.title}>Services</h1></div>
       <Link className={styles.primary} href="/admin/services/new">Add Service</Link>
     </div>
+    <AdminCategoryManager initialCategories={categories.map(({ id, name, slug, description, isActive, sortOrder, hairstyleCount }) => ({ id, name, slug, description, isActive, sortOrder, hairstyleCount }))} />
     <AdminHomepageFeatures initialState={homepageFeatures} />
     <section className={styles.panel} aria-label="Service filters">
       <form className={styles.filters} method="get">

@@ -5,10 +5,13 @@ import {
   deactivateHairstyle,
   deactivateHairstyleVariant,
   getHairstyleDetailForAdmin,
+  isCatalogError,
+  reorderCategories,
   reorderHairstyleVariants,
   setHairstyleSortOrder,
   updateHairstyle,
   updateHairstyleVariantForHairstyle,
+  updateCategory,
 } from "@/lib/catalog";
 import { resolveAdminSession } from "@/lib/admin/auth";
 import { readAdminSessionCookie } from "@/lib/admin/session-cookie";
@@ -62,12 +65,28 @@ function invalidInput() {
 }
 
 function catalogError(error: unknown) {
+  if (isCatalogError(error)) {
+    const messages: Partial<Record<typeof error.code, string>> = {
+      CATEGORY_NOT_FOUND: "This category no longer exists.",
+      SLUG_ALREADY_EXISTS: "Another category already uses that slug.",
+    };
+    return publicJson(error.code === "CATEGORY_NOT_FOUND" ? 404 : 400, {
+      error: {
+        code: error.code,
+        message: messages[error.code] ?? "The catalog change is not valid.",
+      },
+    });
+  }
   const code = error instanceof Error && error.message === "INVALID_PRICE"
     ? "INVALID_PRICE"
     : "INVALID_CATALOG_INPUT";
   return publicJson(400, {
     error: { code, message: "The catalog change is not valid." },
   });
+}
+
+function validCategoryText(value: unknown, maximum: number, nullable = false) {
+  return (nullable && value === null) || (typeof value === "string" && value.trim().length <= maximum);
 }
 
 type AuthorizedInput = { input: Record<string, unknown> } | { response: Response };
@@ -122,14 +141,16 @@ export async function adminCatalogPost(request: Request): Promise<Response> {
     if (
       input.kind === "category" &&
       hasOnly(input, ["kind", "name", "slug", "description", "isActive"]) &&
-      typeof input.name === "string" &&
-      (input.slug === undefined || typeof input.slug === "string") &&
-      (input.description === undefined || typeof input.description === "string") &&
+      validCategoryText(input.name, 120) &&
+      Boolean((input.name as string).trim()) &&
+      (input.slug === undefined || (validCategoryText(input.slug, 120) && Boolean((input.slug as string).trim()))) &&
+      (input.description === undefined || validCategoryText(input.description, 1_000, true)) &&
       (input.isActive === undefined || typeof input.isActive === "boolean")
     ) {
+      const categoryName = input.name as string;
       const category = await createCategory({
-        name: input.name,
-        slug: typeof input.slug === "string" ? input.slug : slug(input.name),
+        name: categoryName,
+        slug: typeof input.slug === "string" ? input.slug : slug(categoryName),
         description: typeof input.description === "string" ? input.description : null,
         isActive: input.isActive !== false,
       });
@@ -289,4 +310,49 @@ export async function adminCatalogPatch(request: Request, id: string): Promise<R
     return catalogError(error);
   }
   return invalidInput();
+}
+/** Authenticated category edit/state boundary. Category IDs and child links are retained. */
+export async function adminCategoryPatch(request: Request, categoryId: string): Promise<Response> {
+  const authorized = await getAuthorizedInput(request);
+  if ("response" in authorized) return authorized.response;
+  const input = authorized.input;
+  if (
+    input.kind !== "category" ||
+    !hasOnly(input, ["kind", "name", "slug", "description", "isActive"]) ||
+    (input.name === undefined && input.slug === undefined && input.description === undefined && input.isActive === undefined) ||
+    (input.name !== undefined && (!validCategoryText(input.name, 120) || !(input.name as string).trim())) ||
+    (input.slug !== undefined && (!validCategoryText(input.slug, 120) || !(input.slug as string).trim())) ||
+    (input.description !== undefined && !validCategoryText(input.description, 1_000, true)) ||
+    (input.isActive !== undefined && typeof input.isActive !== "boolean")
+  ) return invalidInput();
+
+  try {
+    const category = await updateCategory(categoryId, {
+      name: input.name as string | undefined,
+      slug: input.slug as string | undefined,
+      description: input.description as string | null | undefined,
+      isActive: input.isActive as boolean | undefined,
+    });
+    return publicJson(200, { category });
+  } catch (error) {
+    return catalogError(error);
+  }
+}
+
+/** Complete-list reorder: stale, missing, duplicate, and foreign IDs fail atomically. */
+export async function adminCategoriesPut(request: Request): Promise<Response> {
+  const authorized = await getAuthorizedInput(request);
+  if ("response" in authorized) return authorized.response;
+  const input = authorized.input;
+  if (
+    input.kind !== "categories-order" ||
+    !hasOnly(input, ["kind", "orderedCategoryIds"]) ||
+    !Array.isArray(input.orderedCategoryIds) ||
+    !input.orderedCategoryIds.every((id) => typeof id === "string")
+  ) return invalidInput();
+  try {
+    return publicJson(200, { categories: await reorderCategories(input.orderedCategoryIds) });
+  } catch (error) {
+    return catalogError(error);
+  }
 }

@@ -5,6 +5,7 @@ import { isRecordNotFound, isUniqueViolationOn } from "./prisma-errors";
 import {
   adminCategorySelect,
   categoryOrder,
+  toAdminCategory,
   type AdminCategory,
 } from "./read-shapes";
 import {
@@ -38,13 +39,15 @@ export type UpdateCategoryInput = {
   name?: string;
   slug?: string;
   description?: string | null;
+  isActive?: boolean;
 };
 
 export async function listCategoriesForAdmin(): Promise<AdminCategory[]> {
-  return prisma.hairstyleCategory.findMany({
+  const rows = await prisma.hairstyleCategory.findMany({
     select: adminCategorySelect,
     orderBy: categoryOrder,
   });
+  return rows.map(toAdminCategory);
 }
 
 export async function getCategoryForAdmin(categoryId: string): Promise<AdminCategory> {
@@ -53,7 +56,7 @@ export async function getCategoryForAdmin(categoryId: string): Promise<AdminCate
     select: adminCategorySelect,
   });
   if (!category) throw categoryNotFound(categoryId);
-  return category;
+  return toAdminCategory(category);
 }
 
 export async function createCategory(input: CreateCategoryInput): Promise<AdminCategory> {
@@ -65,10 +68,11 @@ export async function createCategory(input: CreateCategoryInput): Promise<AdminC
   const sortOrder = (last._max.sortOrder ?? -1) + 1;
 
   try {
-    return await prisma.hairstyleCategory.create({
+    const category = await prisma.hairstyleCategory.create({
       data: { name, slug, description, sortOrder, isActive: input.isActive ?? true },
       select: adminCategorySelect,
     });
+    return toAdminCategory(category);
   } catch (error) {
     if (isUniqueViolationOn(error, "slug")) throw slugTaken(slug);
     throw error;
@@ -83,14 +87,16 @@ export async function updateCategory(
     name: input.name === undefined ? undefined : normalizeName(input.name, "Category name"),
     slug: input.slug === undefined ? undefined : normalizeSlug(input.slug),
     description: normalizeOptionalText(input.description),
+    isActive: input.isActive,
   };
 
   try {
-    return await prisma.hairstyleCategory.update({
+    const category = await prisma.hairstyleCategory.update({
       where: { id: categoryId },
       data,
       select: adminCategorySelect,
     });
+    return toAdminCategory(category);
   } catch (error) {
     if (isRecordNotFound(error)) throw categoryNotFound(categoryId);
     if (data.slug && isUniqueViolationOn(error, "slug")) throw slugTaken(data.slug);
@@ -142,11 +148,12 @@ async function setCategoryActive(
   isActive: boolean,
 ): Promise<AdminCategory> {
   try {
-    return await prisma.hairstyleCategory.update({
+    const category = await prisma.hairstyleCategory.update({
       where: { id: categoryId },
       data: { isActive },
       select: adminCategorySelect,
     });
+    return toAdminCategory(category);
   } catch (error) {
     if (isRecordNotFound(error)) throw categoryNotFound(categoryId);
     throw error;

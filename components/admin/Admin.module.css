@@ -408,6 +408,43 @@
 .categoryInlineFields .actionLabel { flex: 1 1 220px; }
 .categoryInlineFields .secondary { flex: 0 0 auto; }
 
+.categoryManager { margin-top: 24px; }
+.categoryCreate { margin-bottom: 18px; border: 1px solid #eedfd8; border-radius: 14px; background: #fffaf8; }
+.categoryCreate summary { padding: 14px 16px; cursor: pointer; color: #a91f4d; font-weight: 800; }
+.categoryCreate[open] summary { border-bottom: 1px solid #eedfd8; }
+.categoryCreateGrid { display: grid; gap: 14px; padding: 16px; }
+.categoryCreateGrid .actionLabel,
+.categoryFields .actionLabel { margin: 0; }
+.categoryCreateGrid input:not([type="checkbox"]),
+.categoryFields input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid #decac5; border-radius: 10px; background: #fff; color: inherit; font: inherit; }
+.categoryCreateGrid textarea,
+.categoryFields textarea { width: 100%; min-height: 88px; padding: 10px 12px; resize: vertical; border: 1px solid #decac5; border-radius: 10px; background: #fff; color: inherit; font: inherit; }
+.categoryActive { display: flex; align-items: center; gap: 9px; color: #65585c; font-size: .9rem; font-weight: 700; }
+.categoryActive input { accent-color: #c52f60; }
+.categoryList { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.categoryCard { min-width: 0; display: grid; gap: 14px; padding: 16px; border: 1px solid #eedfd8; border-radius: 14px; background: #fff; }
+.categoryCardHeading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.categoryCardHeading > div { min-width: 0; display: grid; gap: 3px; }
+.categoryCardHeading strong { overflow-wrap: anywhere; font: 1.1rem/1.25 Georgia, serif; }
+.categoryCardHeading span:not(.badge) { color: #766b6e; font-size: .8rem; }
+.categoryFields { min-width: 0; display: grid; gap: 12px; }
+.categoryDescription { grid-column: 1 / -1; }
+.categoryCardActions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.categoryOrderActions { display: flex; gap: 7px; margin-right: auto; }
+.categoryOrderActions .secondary { min-width: 44px; padding: 0 12px; }
+
+@media (min-width: 800px) {
+  .categoryCreateGrid,
+  .categoryFields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .categoryCreateGrid .primary { justify-self: start; }
+}
+
+@media (max-width: 520px) {
+  .categoryCardActions > button { flex: 1 1 100%; }
+  .categoryOrderActions { width: 100%; margin-right: 0; }
+  .categoryOrderActions .secondary { flex: 1; }
+}
+
 .primary,
 .navButton {
   min-height: 44px;

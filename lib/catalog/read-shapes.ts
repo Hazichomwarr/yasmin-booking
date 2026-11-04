@@ -87,6 +87,7 @@ export type AdminCategory = {
   description: string | null;
   isActive: boolean;
   sortOrder: number;
+  hairstyleCount: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -146,7 +147,17 @@ export const adminCategorySelect = {
   sortOrder: true,
   createdAt: true,
   updatedAt: true,
+  _count: { select: { hairstyles: true } },
 } satisfies Prisma.HairstyleCategorySelect;
+
+type AdminCategoryRow = Prisma.HairstyleCategoryGetPayload<{
+  select: typeof adminCategorySelect;
+}>;
+
+export function toAdminCategory(row: AdminCategoryRow): AdminCategory {
+  const { _count, ...category } = row;
+  return { ...category, hairstyleCount: _count.hairstyles };
+}
 
 export const adminMediaSelect = {
   id: true,
