@@ -13,6 +13,7 @@
     "browser:fixtures": "tsx scripts/browser-acceptance-fixtures.ts",
     "browser:dev": "tsx scripts/browser-acceptance-server.ts",
     "browser:expire-session": "tsx scripts/browser-acceptance-expire-session.ts",
+    "catalog:import": "tsx scripts/catalog-import.ts",
     "test": "node --import tsx --test tests/unit/*.test.ts",
     "test:db:prepare": "tsx tests/support/prepare-test-database.ts",
     "test:integration": "node --import tsx --import ./tests/support/integration-env.ts --test --test-concurrency=1 tests/integration/*.test.ts"
