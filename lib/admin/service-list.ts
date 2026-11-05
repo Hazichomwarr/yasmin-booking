@@ -1,4 +1,9 @@
-export type AdminServiceListState = "active" | "inactive" | "draft" | "";
+export type AdminServicesView = "hairstyles" | "categories" | "published" | "drafts";
+
+export type AdminServiceCoverImage = {
+  deliveryUrl: string;
+  altText: string | null;
+};
 
 export type AdminServiceListItem = {
   id: string;
@@ -7,23 +12,36 @@ export type AdminServiceListItem = {
   requiresVariant: boolean;
   isActive: boolean;
   sortOrder: number;
-  category: { id: string; name: string };
+  coverImage: AdminServiceCoverImage | null;
+  category: { id: string; name: string; isActive: boolean };
 };
 
 export const ADMIN_SERVICE_BATCH_SIZE = 10;
 
 export function filterAdminServices(
   services: AdminServiceListItem[],
-  filter: { search: string; categoryId: string; state: AdminServiceListState },
+  filter: { search: string; categoryId: string; view: Exclude<AdminServicesView, "categories"> },
 ): AdminServiceListItem[] {
   const search = filter.search.trim().toLocaleLowerCase("en-US");
   return services.filter((service) => {
     if (filter.categoryId && service.category.id !== filter.categoryId) return false;
-    if (filter.state === "active" && (!service.isActive || (!service.requiresVariant && service.priceCents === null))) return false;
-    if (filter.state === "inactive" && service.isActive) return false;
-    if (filter.state === "draft" && (service.requiresVariant || service.priceCents !== null)) return false;
+    if (filter.view === "published" && !service.isActive) return false;
+    if (filter.view === "drafts" && service.isActive) return false;
     return !search || service.name.toLocaleLowerCase("en-US").includes(search);
   });
+}
+
+export function adminServicesPath(input: {
+  view: AdminServicesView;
+  search?: string;
+  categoryId?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (input.view !== "hairstyles") params.set("view", input.view);
+  if (input.categoryId) params.set("category", input.categoryId);
+  if (input.search?.trim()) params.set("q", input.search.trim());
+  const query = params.toString();
+  return `/admin/services${query ? `?${query}` : ""}`;
 }
 
 export function nextAdminServiceVisibleCount(current: number, total: number): number {

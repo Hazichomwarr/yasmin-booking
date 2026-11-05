@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   ADMIN_SERVICE_BATCH_SIZE,
+  adminServicesPath,
   filterAdminServices,
   nextAdminServiceVisibleCount,
   safeAdminServicesReturnPath,
@@ -18,7 +19,8 @@ function service(index: number, overrides: Partial<AdminServiceListItem> = {}): 
     requiresVariant: false,
     isActive: true,
     sortOrder: index,
-    category: { id: index % 2 ? "braids" : "locs", name: index % 2 ? "Braids" : "Locs" },
+    coverImage: null,
+    category: { id: index % 2 ? "braids" : "locs", name: index % 2 ? "Braids" : "Locs", isActive: true },
     ...overrides,
   };
 }
@@ -38,10 +40,10 @@ describe("admin service list", () => {
   it("searches names case-insensitively with trimmed input without changing ordering", () => {
     const services = [service(1, { name: "Knotless Braids" }), service(2), service(3, { name: "Boho Knotless" })];
     assert.deepEqual(
-      filterAdminServices(services, { search: "  KNOTLESS  ", categoryId: "", state: "" }).map(({ id }) => id),
+      filterAdminServices(services, { search: "  KNOTLESS  ", categoryId: "", view: "hairstyles" }).map(({ id }) => id),
       ["service-1", "service-3"],
     );
-    assert.deepEqual(filterAdminServices(services, { search: "missing", categoryId: "", state: "" }), []);
+    assert.deepEqual(filterAdminServices(services, { search: "missing", categoryId: "", view: "hairstyles" }), []);
   });
 
   it("combines category, publication status, and search filters", () => {
@@ -49,11 +51,22 @@ describe("admin service list", () => {
       service(1, { name: "Active Braids" }),
       service(2, { name: "Active Locs" }),
       service(3, { name: "Inactive Braids", isActive: false }),
-      service(5, { name: "Draft Braids", priceCents: null }),
+      service(5, { name: "Unpriced Published Braids", priceCents: null }),
     ];
-    assert.deepEqual(filterAdminServices(services, { search: "braids", categoryId: "braids", state: "active" }).map(({ id }) => id), ["service-1"]);
-    assert.deepEqual(filterAdminServices(services, { search: "", categoryId: "braids", state: "inactive" }).map(({ id }) => id), ["service-3"]);
-    assert.deepEqual(filterAdminServices(services, { search: "", categoryId: "braids", state: "draft" }).map(({ id }) => id), ["service-5"]);
+    assert.deepEqual(filterAdminServices(services, { search: "braids", categoryId: "braids", view: "published" }).map(({ id }) => id), ["service-1", "service-5"]);
+    assert.deepEqual(filterAdminServices(services, { search: "", categoryId: "braids", view: "drafts" }).map(({ id }) => id), ["service-3"]);
+    assert.deepEqual(filterAdminServices(services, { search: "", categoryId: "braids", view: "hairstyles" }).map(({ id }) => id), ["service-1", "service-3", "service-5"]);
+  });
+
+  it("keeps active services in Published when their category is inactive", () => {
+    const hiddenByCategory = service(1, { category: { id: "braids", name: "Braids", isActive: false } });
+    assert.deepEqual(filterAdminServices([hiddenByCategory], { search: "", categoryId: "", view: "published" }).map(({ id }) => id), ["service-1"]);
+  });
+
+  it("builds deterministic view paths while preserving list context", () => {
+    assert.equal(adminServicesPath({ view: "hairstyles", search: " boho ", categoryId: "braids" }), "/admin/services?category=braids&q=boho");
+    assert.equal(adminServicesPath({ view: "published", search: "boho", categoryId: "braids" }), "/admin/services?view=published&category=braids&q=boho");
+    assert.equal(adminServicesPath({ view: "categories" }), "/admin/services?view=categories");
   });
 
   it("accepts only local Services-list return paths", () => {
