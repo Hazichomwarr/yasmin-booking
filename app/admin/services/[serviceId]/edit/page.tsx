@@ -4,14 +4,19 @@ import styles from "@/components/admin/Admin.module.css";
 import { getAdminHairstyleDetail, listAdminCatalog } from "@/lib/admin/catalog";
 import { requireAdmin } from "@/lib/admin/dal";
 import { listHairstyleMedia } from "@/lib/catalog";
+import { safeAdminServicesReturnPath } from "@/lib/admin/service-list";
 
 export default async function EditAdminServicePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ serviceId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const access = await requireAdmin();
   const { serviceId } = await params;
+  const query = await searchParams;
+  const returnTo = safeAdminServicesReturnPath(typeof query.returnTo === "string" ? query.returnTo : undefined);
   const [{ categories }, service] = await Promise.all([
     listAdminCatalog(access),
     getAdminHairstyleDetail(access, serviceId),
@@ -28,6 +33,7 @@ export default async function EditAdminServicePage({
       <section className={styles.panel}>
         <p className={styles.formIntro}>Update the current catalog configuration. Existing bookings keep their historical service and price snapshots.</p>
         <AdminServiceEditor
+          returnTo={returnTo}
           categories={categories.map(({ id, name }) => ({ id, name }))}
           service={{
             id: service.id,

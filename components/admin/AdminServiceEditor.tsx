@@ -42,7 +42,7 @@ type DraftVariant = {
   sortOrder: string;
 };
 
-type Props = { categories: ServiceEditorCategory[]; service?: ServiceEditorValue };
+type Props = { categories: ServiceEditorCategory[]; service?: ServiceEditorValue; returnTo?: string };
 type ApiError = { error?: { message?: string } };
 type FieldErrors = Record<string, string>;
 type DeactivationTarget = { type: "service" } | { type: "variant"; key: string; remove: boolean };
@@ -84,7 +84,7 @@ function DeactivationDialog({ target, onCancel, onConfirm }: { target: Deactivat
 }
 
 /** Current catalog configuration editor. It never reads or writes appointment snapshots. */
-export function AdminServiceEditor({ categories: initialCategories, service }: Props) {
+export function AdminServiceEditor({ categories: initialCategories, service, returnTo = "/admin/services" }: Props) {
   const router = useRouter();
   const editing = Boolean(service);
   const [categories, setCategories] = useState(initialCategories);
@@ -283,7 +283,7 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
         }
       }
       setNotice(editing ? "Service saved. Returning to Services…" : "Service created. Returning to Services…");
-      router.push("/admin/services"); router.refresh();
+      router.push(returnTo); router.refresh();
     } catch (caught) {
       if (createdDraftId) {
         setPartialCreationId(createdDraftId);
@@ -339,7 +339,7 @@ export function AdminServiceEditor({ categories: initialCategories, service }: P
     <fieldset className={styles.serviceState} disabled={saving}><legend>Publishing</legend><label><input type="radio" checked={!isActive} onChange={() => { if (service?.isActive) setDeactivationTarget({ type: "service" }); else setIsActive(false); }} /> Draft — save without making it bookable</label><label><input type="radio" checked={isActive} onChange={() => setIsActive(true)} /> Active — available for booking when its category is active</label></fieldset>
     <section className={styles.categoryInline} aria-label="Create category"><button className={styles.inlineButton} type="button" onClick={() => setShowCategory((visible) => !visible)} disabled={saving || creatingCategory}>{showCategory ? "Cancel new category" : "Create a category"}</button>{showCategory ? <div className={styles.categoryInlineFields}><label className={styles.actionLabel}>New category name<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} maxLength={120} disabled={creatingCategory} /></label><button className={styles.secondary} type="button" onClick={createCategory} disabled={creatingCategory}>{creatingCategory ? "Creating…" : "Add category"}</button></div> : null}</section>
     {editing ? <AdminServicePhotoGallery key={service!.media.map((media) => `${media.id}:${media.sortOrder}:${media.deliveryUrl}:${media.altText}:${media.caption}`).join("|")} serviceId={service!.id} media={service!.media} /> : null}
-    <div className={styles.actionRow}><button className={styles.primary} type="submit" disabled={saving || Boolean(partialCreationId)}>{submitLabel}</button><Link className={styles.secondary} href="/admin/services" aria-disabled={saving}>Cancel</Link></div>
+    <div className={styles.actionRow}><button className={styles.primary} type="submit" disabled={saving || Boolean(partialCreationId)}>{submitLabel}</button><Link className={styles.secondary} href={returnTo} aria-disabled={saving}>Cancel</Link></div>
     {deactivationTarget ? <DeactivationDialog target={deactivationTarget} onCancel={() => setDeactivationTarget(null)} onConfirm={() => { if (deactivationTarget.type === "service") setIsActive(false); else if (deactivationTarget.remove) { const selected = variants.find((variant) => variant.key === deactivationTarget.key); if (selected?.id) setRemovedVariantIds((current) => [...current, selected.id!]); setVariants((current) => current.filter((variant) => variant.key !== deactivationTarget.key)); } else updateVariant(deactivationTarget.key, "isActive", false); setDeactivationTarget(null); }} /> : null}
   </form>;
 }

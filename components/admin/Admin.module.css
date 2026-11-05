@@ -297,12 +297,22 @@
 }
 
 .filterActions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.linkButton { min-height: 44px; padding: 0; border: 0; background: transparent; color: #a91f4d; font: inherit; font-weight: 700; cursor: pointer; }
+.linkButton:hover { text-decoration: underline; text-underline-offset: 3px; }
+.serviceSearch { display: grid; gap: 6px; margin-bottom: 12px; }
+.serviceSearch > label { font-size: 0.9rem; font-weight: 700; }
+.serviceSearchInput { min-width: 0; display: flex; flex-wrap: wrap; gap: 10px; }
+.serviceSearchInput input { min-width: 0; flex: 1 1 18rem; }
+.serviceSearchInput .secondary { flex: 0 0 auto; }
+.catalogCount { margin: 0; color: #65585c; font-size: 0.88rem; font-weight: 700; }
+.showMore { width: fit-content; min-width: 144px; justify-self: center; }
 
 .catalogHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 18px; }
 .catalogHeading .title { margin-bottom: 0; }
 .catalogHeading .primary { display: inline-flex; align-items: center; text-decoration: none; }
 .catalogList { display: grid; gap: 12px; }
 .catalogCard { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 18px; padding: 18px; border: 1px solid #eedfd8; border-radius: 16px; background: #fffdfa; box-shadow: 0 8px 28px rgba(91, 42, 48, 0.05); }
+.catalogCard > div:first-child { min-width: 0; overflow-wrap: anywhere; }
 .catalogCard h2 { margin: 2px 0 6px; font: 1.25rem/1.2 Georgia, serif; }
 .catalogCategory { margin: 0; color: #c52f60; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; }
 .catalogActions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -597,4 +607,8 @@
   .pendingUpload { grid-template-columns: 44px minmax(0, 1fr); }
   .pendingUpload > button { grid-column: 1 / -1; }
   .photoActions > * { flex: 1 1 calc(50% - 8px); }
+  .serviceSearchInput > * { flex: 1 1 100%; width: 100%; }
+  .catalogCard { align-items: flex-start; }
+  .catalogActions { width: 100%; justify-content: space-between; }
+  .showMore { width: 100%; }
 }
