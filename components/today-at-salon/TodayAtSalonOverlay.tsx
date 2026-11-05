@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { TODAY_AT_SALON_CONTENT } from "./today-at-salon-content";
+import { TODAY_AT_SALON_BOOKING_CTA, TODAY_AT_SALON_CONTENT } from "./today-at-salon-content";
 import {
   shouldOpenTodayAtSalon,
   TODAY_AT_SALON_DELAY_MS,
@@ -78,7 +78,7 @@ export function TodayAtSalonOverlay() {
         <p id="today-at-salon-description">{content.description}</p>
         <div className={styles.overlayActions}>
           <Link className={styles.primaryCta} href={content.ctaHref} onClick={close}>{content.ctaLabel}</Link>
-          <Link className={styles.textLink} href="/today-at-salon" onClick={close}>Watch on its own page</Link>
+          <Link className={styles.textLink} href={TODAY_AT_SALON_BOOKING_CTA.href} onClick={close}>{TODAY_AT_SALON_BOOKING_CTA.label}</Link>
         </div>
       </div>
     </section>

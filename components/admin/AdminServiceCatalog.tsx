@@ -83,7 +83,7 @@ export function AdminServiceCatalog({
             type="search"
             value={search}
             onChange={(event) => changeSearch(event.target.value)}
-            placeholder="Search by hairstyle name"
+            placeholder="Search hairstyles..."
             autoComplete="off"
           />
           {search ? <button type="button" className={styles.secondary} onClick={() => changeSearch("")}>Clear search</button> : null}
@@ -96,7 +96,7 @@ export function AdminServiceCatalog({
     </section>
 
     <p className={styles.catalogCount} role="status">Showing {visible.length} of {matching.length} services</p>
-    {matching.length === 0 ? <section className={styles.panel}><p className={styles.empty}>No services match your search and filters.</p>{search ? <button type="button" className={styles.secondary} onClick={() => changeSearch("")}>Clear search</button> : null}</section> :
+    {matching.length === 0 ? <section className={styles.panel}><p className={styles.empty}>No services match your search and filters. Clear or adjust the search above to continue.</p></section> :
       <section className={styles.catalogList} aria-label="Services">
         {visible.map((service) => <article className={styles.catalogRow} key={service.id}>
           <div className={styles.catalogThumb}>

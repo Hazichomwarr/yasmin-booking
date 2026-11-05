@@ -46,6 +46,35 @@ describe("admin service list", () => {
     assert.deepEqual(filterAdminServices(services, { search: "missing", categoryId: "", view: "hairstyles" }), []);
   });
 
+  it("matches category names and combines them with the selected category and view", () => {
+    const services = [
+      service(1, { name: "Knotless", category: { id: "braids", name: "Braids & Twists", isActive: true } }),
+      service(2, { name: "Starter", category: { id: "locs", name: "Loc Maintenance", isActive: true } }),
+      service(3, { name: "Draft Knotless", isActive: false, category: { id: "braids", name: "Braids & Twists", isActive: true } }),
+    ];
+
+    assert.deepEqual(
+      filterAdminServices(services, { search: "  TWISTS ", categoryId: "braids", view: "published" }).map(({ id }) => id),
+      ["service-1"],
+    );
+    assert.deepEqual(
+      filterAdminServices(services, { search: "braids", categoryId: "braids", view: "drafts" }).map(({ id }) => id),
+      ["service-3"],
+    );
+  });
+
+  it("filters the complete catalog before applying progressive display", () => {
+    const services = Array.from({ length: 24 }, (_, index) => service(index, {
+      name: `${index < 15 ? "Braided" : "Other"} Style ${index}`,
+      category: { id: "other", name: "Other Category", isActive: true },
+    }));
+    const matching = filterAdminServices(services, { search: "braid", categoryId: "", view: "hairstyles" });
+
+    assert.equal(matching.length, 15);
+    assert.equal(visibleAdminServices(matching, ADMIN_SERVICE_BATCH_SIZE).length, 10);
+    assert.equal(visibleAdminServices(matching, nextAdminServiceVisibleCount(10, matching.length)).length, 15);
+  });
+
   it("combines category, publication status, and search filters", () => {
     const services = [
       service(1, { name: "Active Braids" }),
@@ -70,7 +99,7 @@ describe("admin service list", () => {
   });
 
   it("accepts only local Services-list return paths", () => {
-    assert.equal(safeAdminServicesReturnPath("/admin/services?category=braids&q=boho"), "/admin/services?category=braids&q=boho");
+    assert.equal(safeAdminServicesReturnPath("/admin/services?view=published&category=braids&q=boho"), "/admin/services?view=published&category=braids&q=boho");
     assert.equal(safeAdminServicesReturnPath("/admin/services/other"), "/admin/services");
     assert.equal(safeAdminServicesReturnPath("https://example.com/admin/services"), "/admin/services");
   });

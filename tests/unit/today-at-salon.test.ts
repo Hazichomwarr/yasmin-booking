@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { describe, it } from "node:test";
 
-import { TODAY_AT_SALON_CONTENT } from "@/components/today-at-salon/today-at-salon-content";
+import { TODAY_AT_SALON_BOOKING_CTA, TODAY_AT_SALON_CONTENT } from "@/components/today-at-salon/today-at-salon-content";
 import {
   shouldOpenTodayAtSalon,
   TODAY_AT_SALON_DELAY_MS,
@@ -23,5 +23,11 @@ describe("Today at the Salon", () => {
     assert.equal(shouldOpenTodayAtSalon({ reducedMotion: false, hasBlockingInteraction: false }), true);
     assert.equal(shouldOpenTodayAtSalon({ reducedMotion: true, hasBlockingInteraction: false }), false);
     assert.equal(shouldOpenTodayAtSalon({ reducedMotion: false, hasBlockingInteraction: true }), false);
+  });
+
+  it("keeps service exploration primary and sends the secondary action through the gated booking route", () => {
+    assert.equal(TODAY_AT_SALON_CONTENT.ctaLabel, "Explore Our Services");
+    assert.equal(TODAY_AT_SALON_CONTENT.ctaHref, "/styles");
+    assert.deepEqual(TODAY_AT_SALON_BOOKING_CTA, { label: "Book an Appointment", href: "/book" });
   });
 });

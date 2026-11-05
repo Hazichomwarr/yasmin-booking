@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 import { adminServicesPath, type AdminServicesView } from "@/lib/admin/service-list";
 
@@ -20,12 +23,16 @@ export function AdminServicesSubnav({
   search: string;
   categoryId: string;
 }) {
+  const params = useSearchParams();
+  const currentSearch = params.get("q") ?? search;
+  const currentCategoryId = params.get("category") ?? categoryId;
+
   return (
     <nav className={styles.servicesSubnav} aria-label="Service management">
       {destinations.map(({ view, label }) => (
         <Link
           key={view}
-          href={adminServicesPath({ view, search, categoryId })}
+          href={adminServicesPath({ view, search: currentSearch, categoryId: currentCategoryId })}
           aria-current={current === view ? "page" : undefined}
         >
           {label}

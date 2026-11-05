@@ -9,6 +9,11 @@ export type TodayAtSalonContent = {
   publicationLabel?: string;
 };
 
+export const TODAY_AT_SALON_BOOKING_CTA = {
+  label: "Book an Appointment",
+  href: "/book",
+} as const;
+
 /**
  * Weekly rotation is deliberately static: add the optimized MP4 under
  * public/media, update this one versioned path, and deploy. Older videos are

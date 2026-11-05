@@ -27,7 +27,9 @@ export function filterAdminServices(
     if (filter.categoryId && service.category.id !== filter.categoryId) return false;
     if (filter.view === "published" && !service.isActive) return false;
     if (filter.view === "drafts" && service.isActive) return false;
-    return !search || service.name.toLocaleLowerCase("en-US").includes(search);
+    return !search
+      || service.name.toLocaleLowerCase("en-US").includes(search)
+      || service.category.name.toLocaleLowerCase("en-US").includes(search);
   });
 }
 
