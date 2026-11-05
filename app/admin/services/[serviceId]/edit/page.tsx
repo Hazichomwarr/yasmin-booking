@@ -4,7 +4,7 @@ import styles from "@/components/admin/Admin.module.css";
 import { getAdminHairstyleDetail, listAdminCatalog } from "@/lib/admin/catalog";
 import { requireAdmin } from "@/lib/admin/dal";
 import { listHairstyleMedia } from "@/lib/catalog";
-import { safeAdminServicesReturnPath } from "@/lib/admin/service-list";
+import { adminServiceEditNavigation, safeAdminServicesReturnPath } from "@/lib/admin/service-list";
 
 export default async function EditAdminServicePage({
   params,
@@ -17,10 +17,24 @@ export default async function EditAdminServicePage({
   const { serviceId } = await params;
   const query = await searchParams;
   const returnTo = safeAdminServicesReturnPath(typeof query.returnTo === "string" ? query.returnTo : undefined);
-  const [{ categories }, service] = await Promise.all([
+  const [catalog, service] = await Promise.all([
     listAdminCatalog(access),
     getAdminHairstyleDetail(access, serviceId),
   ]);
+  const navigation = adminServiceEditNavigation(
+    catalog.hairstyles.map(({ id, name, priceCents, requiresVariant, isActive, sortOrder, category }) => ({
+      id,
+      name,
+      priceCents,
+      requiresVariant,
+      isActive,
+      sortOrder,
+      coverImage: null,
+      category: { id: category.id, name: category.name, isActive: category.isActive },
+    })),
+    service.id,
+    returnTo,
+  );
   const variantMedia = await Promise.all(
     service.variants.map(async (variant) => [variant.id, await listHairstyleMedia(service.id, variant.id)] as const),
   );
@@ -29,26 +43,23 @@ export default async function EditAdminServicePage({
   return (
     <AdminShell current="services" email={access.email}>
       <p className={styles.eyebrow}>Catalog</p>
-      <h1 className={styles.title}>Edit service</h1>
-      <section className={styles.panel}>
-        <p className={styles.formIntro}>Update the current catalog configuration. Existing bookings keep their historical service and price snapshots.</p>
-        <AdminServiceEditor
-          returnTo={returnTo}
-          categories={categories.map(({ id, name }) => ({ id, name }))}
-          service={{
-            id: service.id,
-            name: service.name,
-            categoryId: service.category.id,
-            description: service.description,
-            priceCents: service.priceCents,
-            requiresVariant: service.requiresVariant,
-            isActive: service.isActive,
-            sortOrder: service.sortOrder,
-            variants: service.variants.map((variant) => ({ ...variant, media: mediaByVariant.get(variant.id) ?? [] })),
-            media: service.media,
-          }}
-        />
-      </section>
+      <AdminServiceEditor
+        returnTo={returnTo}
+        navigation={navigation}
+        categories={catalog.categories.map(({ id, name }) => ({ id, name }))}
+        service={{
+          id: service.id,
+          name: service.name,
+          categoryId: service.category.id,
+          description: service.description,
+          priceCents: service.priceCents,
+          requiresVariant: service.requiresVariant,
+          isActive: service.isActive,
+          sortOrder: service.sortOrder,
+          variants: service.variants.map((variant) => ({ ...variant, media: mediaByVariant.get(variant.id) ?? [] })),
+          media: service.media,
+        }}
+      />
     </AdminShell>
   );
 }

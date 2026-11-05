@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { adminServiceEditPath, type AdminServiceEditNavigation } from "@/lib/admin/service-list";
+import { serviceEditorStateHasChanges, type ServiceEditorDraftState } from "@/lib/admin/service-editor-state";
+
 import { AdminServicePhotoGallery, type ServicePhoto } from "./AdminServicePhotoGallery";
 import styles from "./Admin.module.css";
 
@@ -42,10 +45,16 @@ type DraftVariant = {
   sortOrder: string;
 };
 
-type Props = { categories: ServiceEditorCategory[]; service?: ServiceEditorValue; returnTo?: string };
+type Props = {
+  categories: ServiceEditorCategory[];
+  service?: ServiceEditorValue;
+  returnTo?: string;
+  navigation?: AdminServiceEditNavigation;
+};
 type ApiError = { error?: { message?: string } };
 type FieldErrors = Record<string, string>;
 type DeactivationTarget = { type: "service" } | { type: "variant"; key: string; remove: boolean };
+type NavigationTarget = { href: string; label: string };
 
 function priceString(priceCents: number | null | undefined) {
   return priceCents === null || priceCents === undefined ? "" : (priceCents / 100).toFixed(2);
@@ -83,8 +92,37 @@ function DeactivationDialog({ target, onCancel, onConfirm }: { target: Deactivat
   </div>;
 }
 
+function UnsavedChangesDialog({ target, saving, onStay, onDiscard, onSave }: {
+  target: NavigationTarget;
+  saving: boolean;
+  onStay: () => void;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  const stayButton = useRef<HTMLButtonElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    stayButton.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !saving) onStay(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => { window.removeEventListener("keydown", onKeyDown); previousFocus.current?.focus(); };
+  }, [onStay, saving]);
+  return <div className={styles.dialogBackdrop} role="presentation">
+    <section className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="unsaved-title" aria-describedby="unsaved-description">
+      <div className={styles.dialogHeading}><div><p className={styles.eyebrow}>Unsaved changes</p><h2 id="unsaved-title">Leave this service?</h2></div><button className={styles.close} type="button" onClick={onStay} aria-label="Stay on this service" disabled={saving}>×</button></div>
+      <p id="unsaved-description" className={styles.notice}>Save your changes before continuing to {target.label}, discard them, or stay on this service.</p>
+      <div className={styles.dialogActions}>
+        <button ref={stayButton} className={styles.secondary} type="button" onClick={onStay} disabled={saving}>Stay</button>
+        <button className={styles.danger} type="button" onClick={onDiscard} disabled={saving}>Discard changes</button>
+        <button className={styles.primary} type="button" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save and continue"}</button>
+      </div>
+    </section>
+  </div>;
+}
+
 /** Current catalog configuration editor. It never reads or writes appointment snapshots. */
-export function AdminServiceEditor({ categories: initialCategories, service, returnTo = "/admin/services" }: Props) {
+export function AdminServiceEditor({ categories: initialCategories, service, returnTo = "/admin/services", navigation }: Props) {
   const router = useRouter();
   const editing = Boolean(service);
   const [categories, setCategories] = useState(initialCategories);
@@ -106,10 +144,50 @@ export function AdminServiceEditor({ categories: initialCategories, service, ret
   const [notice, setNotice] = useState<string | null>(null);
   const [partialCreationId, setPartialCreationId] = useState<string | null>(null);
   const [deactivationTarget, setDeactivationTarget] = useState<DeactivationTarget | null>(null);
+  const [navigationTarget, setNavigationTarget] = useState<NavigationTarget | null>(null);
   const originalPricingMode = service?.requiresVariant ? "variants" : "simple";
+  const [initialDraft] = useState<ServiceEditorDraftState>(() => ({
+    name: service?.name ?? "",
+    categoryId: service?.categoryId ?? initialCategories[0]?.id ?? "",
+    description: service?.description ?? "",
+    pricingMode: service?.requiresVariant ? "variants" : "simple",
+    price: priceString(service?.priceCents),
+    variants: service?.variants.map((variant) => ({
+      id: variant.id,
+      name: variant.name,
+      description: variant.description ?? "",
+      price: priceString(variant.priceCents),
+      isActive: variant.isActive,
+      sortOrder: String(variant.sortOrder),
+    })) ?? [],
+    removedVariantIds: [],
+    isActive: service?.isActive ?? false,
+    displayOrder: String(service?.sortOrder ?? 0),
+    newCategoryName: "",
+  }));
 
   const submitLabel = useMemo(() => saving ? "Saving…" : editing ? "Save service" : "Create service", [editing, saving]);
   const orderedVariants = [...variants].sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
+  const currentDraft = useMemo<ServiceEditorDraftState>(() => ({
+    name,
+    categoryId,
+    description,
+    pricingMode,
+    price,
+    variants: variants.map((variant) => ({
+      id: variant.id,
+      name: variant.name,
+      description: variant.description,
+      price: variant.price,
+      isActive: variant.isActive,
+      sortOrder: variant.sortOrder,
+    })),
+    removedVariantIds,
+    isActive,
+    displayOrder,
+    newCategoryName: categoryName,
+  }), [categoryId, categoryName, description, displayOrder, isActive, name, price, pricingMode, removedVariantIds, variants]);
+  const dirty = editing && serviceEditorStateHasChanges(currentDraft, initialDraft);
 
   function updateVariant(key: string, field: keyof Omit<DraftVariant, "key" | "id">, value: string | boolean) {
     setVariants((current) => current.map((variant) => variant.key === key ? { ...variant, [field]: value } : variant));
@@ -225,15 +303,17 @@ export function AdminServiceEditor({ categories: initialCategories, service, ret
     }
   }
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (saving) return;
+  async function saveService(destination: string): Promise<boolean> {
+    if (saving) return false;
     if (partialCreationId) {
       setError("This draft has already been created. Continue editing that draft instead of creating another service.");
-      return;
+      return false;
     }
     const validation = validate();
-    if (validation) return setError(validation);
+    if (validation) {
+      setError(validation);
+      return false;
+    }
     setSaving(true); setError(null); setNotice(null); setPartialCreationId(null);
     let createdDraftId: string | null = null;
     try {
@@ -282,8 +362,9 @@ export function AdminServiceEditor({ categories: initialCategories, service, ret
           if (!publish.ok) throw new Error(await readError(publish));
         }
       }
-      setNotice(editing ? "Service saved. Returning to Services…" : "Service created. Returning to Services…");
-      router.push(returnTo); router.refresh();
+      setNotice(editing ? "Service saved. Continuing…" : "Service created. Returning to Services…");
+      router.push(destination); router.refresh();
+      return true;
     } catch (caught) {
       if (createdDraftId) {
         setPartialCreationId(createdDraftId);
@@ -294,10 +375,33 @@ export function AdminServiceEditor({ categories: initialCategories, service, ret
         setError(caught instanceof Error ? caught.message : "We could not save this service.");
       }
       setSaving(false);
+      return false;
     }
   }
 
-  return <form className={styles.serviceForm} onSubmit={submit} noValidate>
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void saveService(returnTo);
+  }
+
+  function guardNavigation(event: { preventDefault: () => void }, target: NavigationTarget) {
+    if (saving) {
+      event.preventDefault();
+      return;
+    }
+    if (dirty) {
+      event.preventDefault();
+      setNavigationTarget(target);
+    }
+  }
+
+  async function saveAndContinue() {
+    if (!navigationTarget) return;
+    const saved = await saveService(navigationTarget.href);
+    if (!saved) setNavigationTarget(null);
+  }
+
+  const form = <form className={styles.serviceForm} onSubmit={submit} noValidate>
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
     {partialCreationId ? <p className={styles.recovery}><Link href={`/admin/services/${partialCreationId}/edit`}>Continue editing the saved draft</Link></p> : null}
     {notice ? <p className={styles.actionMessage} role="status">{notice}</p> : null}
@@ -339,7 +443,39 @@ export function AdminServiceEditor({ categories: initialCategories, service, ret
     <fieldset className={styles.serviceState} disabled={saving}><legend>Publishing</legend><label><input type="radio" checked={!isActive} onChange={() => { if (service?.isActive) setDeactivationTarget({ type: "service" }); else setIsActive(false); }} /> Draft — save without making it bookable</label><label><input type="radio" checked={isActive} onChange={() => setIsActive(true)} /> Active — available for booking when its category is active</label></fieldset>
     <section className={styles.categoryInline} aria-label="Create category"><button className={styles.inlineButton} type="button" onClick={() => setShowCategory((visible) => !visible)} disabled={saving || creatingCategory}>{showCategory ? "Cancel new category" : "Create a category"}</button>{showCategory ? <div className={styles.categoryInlineFields}><label className={styles.actionLabel}>New category name<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} maxLength={120} disabled={creatingCategory} /></label><button className={styles.secondary} type="button" onClick={createCategory} disabled={creatingCategory}>{creatingCategory ? "Creating…" : "Add category"}</button></div> : null}</section>
     {editing ? <AdminServicePhotoGallery key={service!.media.map((media) => `${media.id}:${media.sortOrder}:${media.deliveryUrl}:${media.altText}:${media.caption}`).join("|")} serviceId={service!.id} media={service!.media} /> : null}
-    <div className={styles.actionRow}><button className={styles.primary} type="submit" disabled={saving || Boolean(partialCreationId)}>{submitLabel}</button><Link className={styles.secondary} href={returnTo} aria-disabled={saving}>Cancel</Link></div>
+    <div className={styles.actionRow}><button className={styles.primary} type="submit" disabled={saving || Boolean(partialCreationId)}>{submitLabel}</button><Link className={styles.secondary} href={returnTo} aria-disabled={saving} onNavigate={(event) => guardNavigation(event, { href: returnTo, label: "Services" })}>Cancel</Link></div>
     {deactivationTarget ? <DeactivationDialog target={deactivationTarget} onCancel={() => setDeactivationTarget(null)} onConfirm={() => { if (deactivationTarget.type === "service") setIsActive(false); else if (deactivationTarget.remove) { const selected = variants.find((variant) => variant.key === deactivationTarget.key); if (selected?.id) setRemovedVariantIds((current) => [...current, selected.id!]); setVariants((current) => current.filter((variant) => variant.key !== deactivationTarget.key)); } else updateVariant(deactivationTarget.key, "isActive", false); setDeactivationTarget(null); }} /> : null}
   </form>;
+
+  if (!navigation) return form;
+
+  const previousHref = navigation.previousId ? adminServiceEditPath(navigation.previousId, returnTo) : null;
+  const nextHref = navigation.nextId ? adminServiceEditPath(navigation.nextId, returnTo) : null;
+
+  return <>
+    <Link className={styles.backToServices} href={returnTo} onNavigate={(event) => guardNavigation(event, { href: returnTo, label: "Services" })}>
+      <span aria-hidden="true">←</span> Back to Services
+    </Link>
+    <div className={styles.serviceEditHeading}>
+      <div>
+        <h1 className={styles.title}>Edit service</h1>
+        <p className={styles.servicePosition}>{navigation.position} of {navigation.total}</p>
+      </div>
+      <nav className={styles.serviceStepNavigation} aria-label="Browse services">
+        {previousHref ? <Link href={previousHref} aria-label="Previous service" onNavigate={(event) => guardNavigation(event, { href: previousHref, label: "the previous service" })}>← Previous</Link> : <span aria-disabled="true">← Previous</span>}
+        {nextHref ? <Link href={nextHref} aria-label="Next service" onNavigate={(event) => guardNavigation(event, { href: nextHref, label: "the next service" })}>Next →</Link> : <span aria-disabled="true">Next →</span>}
+      </nav>
+    </div>
+    <section className={styles.panel}>
+      <p className={styles.formIntro}>Update the current catalog configuration. Existing bookings keep their historical service and price snapshots.</p>
+      {form}
+    </section>
+    {navigationTarget ? <UnsavedChangesDialog
+      target={navigationTarget}
+      saving={saving}
+      onStay={() => setNavigationTarget(null)}
+      onDiscard={() => { router.push(navigationTarget.href); router.refresh(); }}
+      onSave={() => { void saveAndContinue(); }}
+    /> : null}
+  </>;
 }

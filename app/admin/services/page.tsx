@@ -8,7 +8,7 @@ import { AdminServicesSubnav } from "@/components/admin/AdminServicesSubnav";
 import styles from "@/components/admin/Admin.module.css";
 import { getAdminHomepageFeatures, listAdminCatalog } from "@/lib/admin/catalog";
 import { requireAdmin } from "@/lib/admin/dal";
-import type { AdminServicesView } from "@/lib/admin/service-list";
+import { adminServiceVisibleCount, type AdminServicesView } from "@/lib/admin/service-list";
 
 function servicesView(query: Record<string, string | string[] | undefined>): AdminServicesView {
   if (query.view === "categories" || query.view === "published" || query.view === "drafts") return query.view;
@@ -24,6 +24,7 @@ export default async function AdminServicesPage({ searchParams }: { searchParams
   const view = servicesView(query);
   const categoryId = typeof query.category === "string" ? query.category : undefined;
   const search = typeof query.q === "string" ? query.q : "";
+  const visibleCount = adminServiceVisibleCount(query.show);
   const { categories, hairstyles } = await listAdminCatalog(access);
   const homepageFeatures = view === "categories" ? null : await getAdminHomepageFeatures(access);
   const coverByHairstyleId = new Map(
@@ -64,6 +65,7 @@ export default async function AdminServicesPage({ searchParams }: { searchParams
           view={listView}
           initialCategoryId={categoryId}
           initialSearch={search}
+          initialVisibleCount={visibleCount}
         />
       </>
     )}

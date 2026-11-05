@@ -3,6 +3,9 @@ import { describe, it } from "node:test";
 
 import {
   ADMIN_SERVICE_BATCH_SIZE,
+  adminServiceEditNavigation,
+  adminServiceEditPath,
+  adminServiceVisibleCount,
   adminServicesPath,
   filterAdminServices,
   nextAdminServiceVisibleCount,
@@ -95,12 +98,58 @@ describe("admin service list", () => {
   it("builds deterministic view paths while preserving list context", () => {
     assert.equal(adminServicesPath({ view: "hairstyles", search: " boho ", categoryId: "braids" }), "/admin/services?category=braids&q=boho");
     assert.equal(adminServicesPath({ view: "published", search: "boho", categoryId: "braids" }), "/admin/services?view=published&category=braids&q=boho");
+    assert.equal(adminServicesPath({ view: "drafts", search: "boho", visibleCount: 20 }), "/admin/services?view=drafts&q=boho&show=20");
     assert.equal(adminServicesPath({ view: "categories" }), "/admin/services?view=categories");
   });
 
   it("accepts only local Services-list return paths", () => {
-    assert.equal(safeAdminServicesReturnPath("/admin/services?view=published&category=braids&q=boho"), "/admin/services?view=published&category=braids&q=boho");
+    assert.equal(safeAdminServicesReturnPath("/admin/services?view=published&category=braids&q=boho&show=20&unsafe=value"), "/admin/services?view=published&category=braids&q=boho&show=20");
     assert.equal(safeAdminServicesReturnPath("/admin/services/other"), "/admin/services");
     assert.equal(safeAdminServicesReturnPath("https://example.com/admin/services"), "/admin/services");
+  });
+
+  it("parses progressive display state conservatively", () => {
+    assert.equal(adminServiceVisibleCount(undefined), 10);
+    assert.equal(adminServiceVisibleCount("9"), 10);
+    assert.equal(adminServiceVisibleCount("20"), 20);
+    assert.equal(adminServiceVisibleCount("not-a-number"), 10);
+    assert.equal(adminServiceVisibleCount("9999"), 1_000);
+  });
+
+  it("navigates within the originating filtered result set", () => {
+    const services = [
+      service(1, { name: "Boho One" }),
+      service(2, { name: "Boho Draft", isActive: false }),
+      service(3, { name: "Boho Three" }),
+      service(4, { name: "Other Style" }),
+    ];
+    const returnTo = "/admin/services?view=published&category=braids&q=boho&show=20";
+
+    assert.deepEqual(adminServiceEditNavigation(services, "service-1", returnTo), {
+      previousId: null,
+      nextId: "service-3",
+      position: 1,
+      total: 2,
+    });
+    assert.deepEqual(adminServiceEditNavigation(services, "service-3", returnTo), {
+      previousId: "service-1",
+      nextId: null,
+      position: 2,
+      total: 2,
+    });
+  });
+
+  it("falls back to the full deterministic list when the current service is outside the filter", () => {
+    const services = [service(1), service(2, { isActive: false }), service(3)];
+    assert.deepEqual(adminServiceEditNavigation(services, "service-2", "/admin/services?view=published"), {
+      previousId: "service-1",
+      nextId: "service-3",
+      position: 2,
+      total: 3,
+    });
+    assert.equal(
+      adminServiceEditPath("service/2", "/admin/services?view=drafts&q=boho&show=20"),
+      "/admin/services/service%2F2/edit?returnTo=%2Fadmin%2Fservices%3Fview%3Ddrafts%26q%3Dboho%26show%3D20",
+    );
   });
 });

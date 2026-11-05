@@ -22,7 +22,7 @@ function dollars(cents: number | null) {
   return cents === null ? "Draft" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 
-function updateLocation(filter: { search: string; categoryId: string; view: Exclude<AdminServicesView, "categories"> }) {
+function updateLocation(filter: { search: string; categoryId: string; view: Exclude<AdminServicesView, "categories">; visibleCount?: number }) {
   window.history.replaceState(null, "", adminServicesPath(filter));
 }
 
@@ -32,17 +32,19 @@ export function AdminServiceCatalog({
   view = "hairstyles",
   initialCategoryId = "",
   initialSearch = "",
+  initialVisibleCount = ADMIN_SERVICE_BATCH_SIZE,
 }: {
   categories: Category[];
   services: AdminServiceListItem[];
   view?: Exclude<AdminServicesView, "categories">;
   initialCategoryId?: string;
   initialSearch?: string;
+  initialVisibleCount?: number;
 }) {
   const [search, setSearch] = useState(initialSearch);
   const [categoryId, setCategoryId] = useState(initialCategoryId);
   const [draftCategoryId, setDraftCategoryId] = useState(initialCategoryId);
-  const [visibleCount, setVisibleCount] = useState(ADMIN_SERVICE_BATCH_SIZE);
+  const [visibleCount, setVisibleCount] = useState(initialVisibleCount);
 
   const matching = useMemo(
     () => filterAdminServices(services, { search, categoryId, view }),
@@ -71,7 +73,7 @@ export function AdminServiceCatalog({
     updateLocation({ search: "", categoryId: "", view });
   }
 
-  const returnTo = adminServicesPath({ search, categoryId, view });
+  const returnTo = adminServicesPath({ search, categoryId, view, visibleCount });
 
   return <>
     <section className={styles.panel} aria-label="Service search and filters">
@@ -109,7 +111,11 @@ export function AdminServiceCatalog({
             <Link className={styles.secondary} href={`/admin/services/${service.id}/edit?returnTo=${encodeURIComponent(returnTo)}`}>Edit</Link>
           </div>
         </article>)}
-        {visible.length < matching.length ? <button className={`${styles.secondary} ${styles.showMore}`} type="button" onClick={() => setVisibleCount((current) => nextAdminServiceVisibleCount(current, matching.length))}>Show 10 more</button> : null}
+        {visible.length < matching.length ? <button className={`${styles.secondary} ${styles.showMore}`} type="button" onClick={() => {
+          const next = nextAdminServiceVisibleCount(visibleCount, matching.length);
+          setVisibleCount(next);
+          updateLocation({ search, categoryId, view, visibleCount: next });
+        }}>Show 10 more</button> : null}
       </section>}
   </>;
 }
