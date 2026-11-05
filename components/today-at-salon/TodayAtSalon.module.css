@@ -1,0 +1,46 @@
+.page { min-height: 100vh; overflow-x: hidden; background: radial-gradient(circle at 80% 12%,#f7dce3 0,transparent 32%),linear-gradient(145deg,#fffaf6,#fff4ef); }
+.pageContent { width: min(calc(100% - 40px),1120px); margin-inline: auto; padding: 150px 0 72px; }
+.pageGrid { display: grid; grid-template-columns: minmax(280px,430px) minmax(0,1fr); align-items: center; gap: clamp(40px,7vw,90px); }
+.pageCopy { min-width: 0; }
+.eyebrow { margin: 0 0 12px; color: var(--color-rose); font-size: 12px; font-weight: 800; letter-spacing: .24em; text-transform: uppercase; }
+.pageCopy h1,.overlayCopy h2 { margin: 0; font-family: Georgia,'Times New Roman',serif; font-weight: 500; letter-spacing: -.045em; }
+.pageCopy h1 { max-width: 650px; font-size: clamp(48px,6vw,82px); line-height: .98; }
+.pageCopy > p:not(.eyebrow) { max-width: 600px; margin: 22px 0 30px; color: #65585c; font-size: clamp(18px,2vw,23px); line-height: 1.55; }
+.pageActions,.overlayActions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.primaryCta { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; border-radius: 999px; padding: 12px 22px; color: #fff; background: linear-gradient(105deg,#c72f62,#ae1d4c); box-shadow: 0 12px 28px rgba(181,41,80,.2); font-weight: 800; }
+.textLink { min-height: 44px; display: inline-flex; align-items: center; color: #8d173f; font-weight: 800; text-decoration: underline; text-underline-offset: 4px; }
+.primaryCta:focus-visible,.textLink:focus-visible,.close:focus-visible { outline: 3px solid rgba(198,53,96,.38); outline-offset: 4px; }
+.videoFrame { position: relative; width: 100%; aspect-ratio: 9/16; overflow: hidden; border: 1px solid rgba(135,82,70,.16); border-radius: 28px; background: linear-gradient(145deg,#edc9bf,#d88b9f); box-shadow: 0 28px 70px rgba(72,34,20,.18); }
+.videoFrame video { width: 100%; height: 100%; display: block; object-fit: cover; background: #1a1416; }
+.videoFallback { position: absolute; inset: 0; }
+.videoFallback img { object-fit: cover; }
+.videoFallback::after { content:""; position:absolute; inset:0; background:linear-gradient(0deg,rgba(26,15,18,.82),rgba(26,15,18,.05) 58%); }
+.videoFallback > div { position:absolute; z-index:1; inset:auto 22px 24px; display:grid; gap:5px; color:#fff; }
+.videoFallback strong { font: 500 25px/1.1 Georgia,serif; }
+.videoFallback span { font-size:14px; line-height:1.4; }
+.backdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: 24px; background: rgba(24,14,18,.72); backdrop-filter: blur(8px); }
+.overlayCard { position: relative; width: min(900px,100%); display: grid; grid-template-columns: minmax(250px,360px) minmax(0,1fr); align-items: center; gap: clamp(26px,5vw,58px); border: 1px solid rgba(255,255,255,.65); border-radius: 30px; padding: 24px clamp(24px,5vw,58px) 24px 24px; background: #fffaf6; box-shadow: 0 28px 90px rgba(0,0,0,.3); }
+.overlayVideo { max-height: min(72vh,620px); justify-self: center; }
+.overlayCopy { min-width: 0; }
+.overlayCopy h2 { font-size: clamp(38px,5vw,62px); line-height: 1; }
+.overlayCopy > p:not(.eyebrow) { margin: 18px 0 26px; color: #65585c; font-size: 18px; line-height: 1.55; }
+.close { position: absolute; z-index: 2; top: 14px; right: 14px; width: 44px; height: 44px; border: 1px solid rgba(139,75,65,.18); border-radius: 50%; color: #4d353b; background: rgba(255,255,255,.94); box-shadow: 0 8px 24px rgba(72,34,20,.12); font: 300 29px/1 Arial,sans-serif; cursor: pointer; }
+@media (max-width:700px) {
+  .pageContent { width: min(calc(100% - 32px),560px); padding-top: 116px; }
+  .pageGrid { grid-template-columns: 1fr; gap: 32px; }
+  .pageCopy { order: -1; }
+  .pageCopy h1 { font-size: clamp(45px,14vw,64px); }
+  .pageVideo { width: min(100%,390px); justify-self: center; }
+  .backdrop { align-items: start; padding: 12px; }
+  .overlayCard { width: min(100%,460px); grid-template-columns: 1fr; gap: 22px; border-radius: 24px; padding: 58px 18px 22px; }
+  .overlayVideo { width: min(100%,280px); max-height: none; }
+  .overlayCopy { text-align: center; }
+  .overlayCopy h2 { font-size: clamp(36px,11vw,50px); }
+  .overlayActions { justify-content: center; }
+}
+@media (max-width:390px) {
+  .pageActions,.overlayActions { align-items: stretch; flex-direction: column; }
+  .primaryCta,.textLink { width: 100%; justify-content: center; }
+  .overlayVideo { width: min(100%,220px); }
+}
+@media (prefers-reduced-motion:reduce) { .backdrop { backdrop-filter: none; } }
