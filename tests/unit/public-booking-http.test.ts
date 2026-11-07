@@ -4,8 +4,8 @@ import { describe, it } from "node:test";
 import type { BookingErrorCode } from "@/lib/booking/errors";
 import { BOOKING_COOKIE_NAME, bookingCookie, clearedBookingCookie, readBookingCookie } from "@/lib/http/booking-cookie";
 import { UNIDENTIFIED_CLIENT, clientIdentity, normalizeIp } from "@/lib/http/client-ip";
-import { DEFAULT_RATE_LIMITS, isPublicBookingEnabled, loadPublicBookingConfig, type Env } from "@/lib/http/config";
-import { AMBIGUOUS_CHECKOUT_TO_PUBLIC, isApprovedCheckoutUrl } from "@/lib/http/public-booking-api";
+import { DEFAULT_RATE_LIMITS, isPublicBookingEnabled, loadPublicBookingConfig, type ConfigProblemCode, type Env } from "@/lib/http/config";
+import { AMBIGUOUS_CHECKOUT_TO_PUBLIC, createPublicBookingApi, isApprovedCheckoutUrl, type PublicApiLogEntry, type PublicBookingApiDeps } from "@/lib/http/public-booking-api";
 import { BOOKING_ERROR_TO_PUBLIC, PUBLIC_ERRORS, SECURITY_HEADERS, publicError } from "@/lib/http/public-responses";
 import { rateLimitKey, windowStartMs } from "@/lib/http/rate-limit";
 import { checkMutationOrigin, isJsonContentType, parseJsonObject, readBodyText } from "@/lib/http/request-guards";
@@ -108,6 +108,66 @@ describe("configuration", () => {
     const scopes = Object.values(DEFAULT_RATE_LIMITS).map((r) => r.scope);
     assert.equal(new Set(scopes).size, scopes.length);
     for (const scope of scopes) assert.match(scope, /^[a-z][a-z0-9.-]{0,63}$/);
+  });
+});
+
+describe("configuration diagnostics", () => {
+  const codes = (env: Env): ConfigProblemCode[] => {
+    const result = loadPublicBookingConfig(env);
+    return result.ok ? [] : result.codes;
+  };
+
+  it("names each failing field with a fixed code", () => {
+    const cases: [ConfigProblemCode, Env][] = [
+      ["INVALID_APP_BASE_URL", { ...PROD, APP_BASE_URL: undefined }],
+      ["INSECURE_APP_BASE_URL", { ...PROD, APP_BASE_URL: "http://book.yasmin.example" }],
+      ["INVALID_RATE_LIMIT_SECRET", { ...PROD, RATE_LIMIT_SECRET: "short" }],
+      ["INVALID_TRUSTED_CLIENT_IP_SOURCE", { ...PROD, TRUSTED_CLIENT_IP_SOURCE: "none" }],
+      ["INVALID_STRIPE_SECRET_KEY", { ...PROD, STRIPE_SECRET_KEY: "rk_live_restricted" }],
+      ["INVALID_STRIPE_SECRET_KEY", { ...PROD, STRIPE_SECRET_KEY: " sk_live_padded" }],
+      ["LIVE_STRIPE_KEY_OUTSIDE_PRODUCTION", { ...PROD, VERCEL_ENV: "preview" }],
+      ["ADDITIONAL_ORIGINS_ON_PRODUCTION", { ...PROD, PUBLIC_BOOKING_ADDITIONAL_ORIGINS: "https://preview.vercel.app" }],
+      ["INVALID_ADDITIONAL_ORIGINS", { ...PROD, VERCEL_ENV: "preview", STRIPE_SECRET_KEY: "sk_test_x", PUBLIC_BOOKING_ADDITIONAL_ORIGINS: "https://*.vercel.app" }],
+      ["INVALID_RATE_LIMITS", { ...PROD, PUBLIC_BOOKING_RATE_LIMITS: "5" }],
+    ];
+    for (const [code, env] of cases) assert.deepEqual(codes(env), [code], code);
+  });
+
+  it("reports every failing field once, in validation order", () => {
+    assert.deepEqual(codes({ ...PROD, RATE_LIMIT_SECRET: "", STRIPE_SECRET_KEY: "nope" }), ["INVALID_RATE_LIMIT_SECRET", "INVALID_STRIPE_SECRET_KEY"]);
+    assert.deepEqual(codes(PROD), []);
+  });
+
+  it("logs only fixed codes, keeps the 503 response, and never leaks secrets", async () => {
+    const secretKey = "rk_live_SUPERSECRETVALUE123";
+    const rateSecret = "tooShortRateSecret";
+    const logs: PublicApiLogEntry[] = [];
+    const mustNotRun = () => { throw new Error("must not run on invalid configuration"); };
+    const deps: PublicBookingApiDeps = {
+      env: () => ({ ...PROD, PUBLIC_BOOKING_ENABLED: "true", STRIPE_SECRET_KEY: secretKey, RATE_LIMIT_SECRET: rateSecret }),
+      createBooking: mustNotRun,
+      startCheckout: mustNotRun,
+      getStatus: mustNotRun,
+      getAvailability: mustNotRun,
+      releaseBooking: mustNotRun,
+      consumeRateLimits: mustNotRun,
+      log: (entry) => logs.push(entry),
+    };
+    const response = await createPublicBookingApi(deps).getAvailability(new Request("https://book.yasmin.example/api/bookings/availability"));
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: { code: "SERVICE_UNAVAILABLE", message: "The booking service is temporarily unavailable." } });
+    assert.deepEqual(logs, [{
+      route: "bookings.availability",
+      status: 503,
+      code: "SERVICE_UNAVAILABLE",
+      detail: "configuration-invalid",
+      configProblems: ["INVALID_RATE_LIMIT_SECRET", "INVALID_STRIPE_SECRET_KEY"],
+      requestId: undefined,
+    }]);
+    const logged = JSON.stringify(logs);
+    for (const leak of [secretKey, rateSecret, "rk_", "sk_", "SUPERSECRET", rateSecret.slice(0, 4)]) {
+      assert.ok(!logged.includes(leak), `logged ${leak}`);
+    }
   });
 });
 

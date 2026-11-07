@@ -16,7 +16,7 @@ import {
 
 import { bookingCookie, clearedBookingCookie, readBookingCookie } from "./booking-cookie";
 import { clientIdentity } from "./client-ip";
-import { isPublicBookingEnabled, loadPublicBookingConfig, type Env, type PublicBookingConfig, type RateLimitName } from "./config";
+import { isPublicBookingEnabled, loadPublicBookingConfig, type ConfigProblemCode, type Env, type PublicBookingConfig, type RateLimitName } from "./config";
 import { BOOKING_ERROR_TO_PUBLIC, publicError, publicJson, type PublicErrorCode } from "./public-responses";
 import { consumeRateLimits, type RateLimitCheck, type RateLimitDecision } from "./rate-limit";
 import { checkMutationOrigin, isJsonContentType, parseJsonObject, readBodyText } from "./request-guards";
@@ -49,6 +49,8 @@ export type PublicApiLogEntry = {
   code?: PublicErrorCode;
   /** A reason enum (origin rejection, access denial, ambiguity reason, rate-limit scope, error class). */
   detail?: string;
+  /** Fixed validation identifiers when detail is "configuration-invalid"; never configuration values. */
+  configProblems?: readonly ConfigProblemCode[];
   requestId?: string;
 };
 
@@ -151,7 +153,11 @@ export function createPublicBookingApi(deps: PublicBookingApiDeps = defaultPubli
     const env = deps.env();
     if (!isPublicBookingEnabled(env)) return publicError("NOT_FOUND");
     const loaded = loadPublicBookingConfig(env);
-    if (!loaded.ok) return fail(route, request, "SERVICE_UNAVAILABLE", "configuration-invalid");
+    if (!loaded.ok) {
+      const response = publicError("SERVICE_UNAVAILABLE");
+      deps.log({ route, status: response.status, code: "SERVICE_UNAVAILABLE", detail: "configuration-invalid", configProblems: loaded.codes, requestId: requestId(request) });
+      return response;
+    }
     return loaded.config;
   }
 
