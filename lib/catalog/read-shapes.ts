@@ -103,6 +103,7 @@ export type AdminMedia = {
   caption: string | null;
   sortOrder: number;
   createdAt: Date;
+  updatedAt: Date;
 };
 
 export type AdminHairstyle = {
@@ -170,6 +171,7 @@ export const adminMediaSelect = {
   caption: true,
   sortOrder: true,
   createdAt: true,
+  updatedAt: true,
 } satisfies Prisma.HairstyleMediaSelect;
 
 export const adminHairstyleSelect = {

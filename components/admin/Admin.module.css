@@ -505,6 +505,23 @@
 .pendingUpload div { min-width: 0; display: grid; gap: 3px; }
 .pendingUpload strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pendingUpload span { color: #766b6e; font-size: 0.82rem; }
+.replacementUpload {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #d9a045;
+  border-radius: 10px;
+  background: #fff8e8;
+}
+.replacementUpload img { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; }
+.replacementUpload div { min-width: 0; display: grid; gap: 3px; }
+.replacementUpload strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replacementUpload span { color: #655136; font-size: .82rem; line-height: 1.35; }
+.replacementUpload button { min-height: 44px; }
 .photoGrid { display: grid; gap: 14px; }
 .photoCard { display: grid; gap: 14px; padding: 12px; border: 1px solid #eedfd8; border-radius: 14px; background: #fff; }
 .photoPreview { position: relative; min-height: 180px; display: grid; place-items: center; overflow: hidden; border-radius: 10px; background: #f5eae6; }
@@ -516,7 +533,7 @@
 .photoActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .photoActions .secondary,
 .photoActions .danger,
-.photoActions .inlineButton { min-height: 40px; padding: 0 12px; }
+.photoActions .inlineButton { min-height: 44px; padding: 0 12px; }
 .variantActive input { accent-color: #c52f60; }
 .categoryInline { display: grid; gap: 12px; padding-top: 2px; }
 .inlineButton { justify-self: start; padding: 0; border: 0; background: transparent; color: #a91f4d; cursor: pointer; font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
@@ -731,6 +748,8 @@
   .dialogActions > * { flex: 1 1 100%; }
   .pendingUpload { grid-template-columns: 44px minmax(0, 1fr); }
   .pendingUpload > button { grid-column: 1 / -1; }
+  .replacementUpload { grid-template-columns: 52px minmax(0, 1fr); }
+  .replacementUpload > button { grid-column: 1 / -1; width: 100%; }
   .photoActions > * { flex: 1 1 calc(50% - 8px); }
   .serviceSearchInput > * { flex: 1 1 100%; width: 100%; }
   .servicesSubnav { margin-inline: -2px; }

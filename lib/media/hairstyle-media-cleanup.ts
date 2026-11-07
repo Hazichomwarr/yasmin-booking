@@ -58,9 +58,36 @@ export async function removeHairstyleImageAndQueueCleanup(
     await tx.hairstyleMediaCleanupTask.upsert({
       where: { storageKey_operation: { storageKey: media.storageKey, operation: "DELETE_BLOB" } },
       create: { hairstyleId, sourceMediaId: media.id, storageKey: media.storageKey },
-      update: {},
+      // A prior orphan-cleanup task may have been cancelled after this object
+      // was attached. Rearm it for the later, explicit administrator removal.
+      update: {
+        hairstyleId,
+        sourceMediaId: media.id,
+        state: "PENDING",
+        attemptCount: 0,
+        lastFailure: null,
+        nextAttemptAt: new Date(0),
+        leaseToken: null,
+        leasedAt: null,
+        completedAt: null,
+      },
     });
     return { mediaId: media.id, hairstyleId, storageKey: media.storageKey, alreadyRemoved: false };
+  });
+}
+
+/**
+ * Every authorized immutable pathname is registered before it reaches the
+ * browser. If neither completion path arrives, the existing worker can still
+ * discover and remove the abandoned object after all completion windows end.
+ */
+export async function queueAuthorizedHairstyleImageCleanup(
+  hairstyleId: string,
+  storageKey: string,
+  nextAttemptAt: Date,
+): Promise<void> {
+  await prisma.hairstyleMediaCleanupTask.create({
+    data: { hairstyleId, storageKey, nextAttemptAt },
   });
 }
 
@@ -110,12 +137,34 @@ export async function runHairstyleMediaCleanup(
 
     // A callback may have attached this Blob during its grace window. This
     // check happens after the lease claim, immediately before any provider call.
-    const attached = await prisma.hairstyleMedia.findUnique({
-      where: { storageKey: claimed.storageKey },
+    const canonicalUrl = blobUrl(config.publicBaseUrl, claimed.storageKey);
+    const attached = await prisma.hairstyleMedia.findFirst({
+      where: { OR: [{ storageKey: claimed.storageKey }, { deliveryUrl: canonicalUrl }] },
       select: { id: true },
     });
     if (attached) {
-      if (await completeClaim(claimed.id, claimed.leaseToken!, await now())) summary.skipped += 1;
+      if (claimed.sourceMediaId === null) {
+        // This was an orphan-upload cleanup that later attached successfully.
+        // Remove the obsolete task so a future explicit removal can enqueue a
+        // fresh deletion rather than colliding with a completed task.
+        const cancelled = await prisma.hairstyleMediaCleanupTask.deleteMany({
+          where: { id: claimed.id, state: "PROCESSING", leaseToken: claimed.leaseToken },
+        });
+        if (cancelled.count === 1) summary.skipped += 1;
+      } else {
+        // An explicit removal/replacement key must never become live again.
+        // Fail closed and surface it for operator attention.
+        const fenced = await prisma.hairstyleMediaCleanupTask.updateMany({
+          where: { id: claimed.id, state: "PROCESSING", leaseToken: claimed.leaseToken },
+          data: {
+            state: "FAILED",
+            leaseToken: null,
+            leasedAt: null,
+            lastFailure: "active-reference-blocked-deletion",
+          },
+        });
+        if (fenced.count === 1) summary.exhausted += 1;
+      }
       continue;
     }
 
@@ -166,7 +215,7 @@ async function claimNextTask(now: Date) {
       ],
     },
     orderBy: { createdAt: "asc" },
-    select: { id: true, storageKey: true, state: true, attemptCount: true, leasedAt: true },
+    select: { id: true, storageKey: true, sourceMediaId: true, state: true, attemptCount: true, leasedAt: true },
   });
   if (!candidate) return null;
   const leaseToken = randomUUID();
@@ -175,7 +224,7 @@ async function claimNextTask(now: Date) {
     data: { state: "PROCESSING", attemptCount: candidate.attemptCount + 1, leaseToken, leasedAt: now, lastFailure: null },
   });
   return claim.count === 1
-    ? { id: candidate.id, storageKey: candidate.storageKey, leaseToken, attemptCount: candidate.attemptCount + 1 }
+    ? { id: candidate.id, storageKey: candidate.storageKey, sourceMediaId: candidate.sourceMediaId, leaseToken, attemptCount: candidate.attemptCount + 1 }
     : null;
 }
 

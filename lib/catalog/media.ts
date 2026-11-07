@@ -65,6 +65,12 @@ export type IdempotentImageAttachment = {
   created: boolean;
 };
 
+export type ReplaceHairstyleImageInput = AttachHairstyleImageInput & {
+  targetMediaId: string;
+  expectedTargetStorageKey: string;
+  expectedTargetUpdatedAt: Date;
+};
+
 export type AttachVerifiedHairstyleVideoInput = MediaMetadataFields & {
   /**
    * Measurement of the stored asset obtained server-side by media ingestion.
@@ -142,7 +148,10 @@ export async function attachHairstyleImageIdempotently(
     where: { storageKey },
     select: adminMediaSelect,
   });
-  if (existing) return existingImageAttachment(existing, input.hairstyleId, hairstyleVariantId, deliveryUrl);
+  if (existing) {
+    await reconcileExistingImageCleanup(existing, input.hairstyleId, hairstyleVariantId, deliveryUrl);
+    return existingImageAttachment(existing, input.hairstyleId, hairstyleVariantId, deliveryUrl);
+  }
 
   try {
     return { media: await attachHairstyleImage({ ...input, hairstyleVariantId, storageKey, deliveryUrl }), created: true };
@@ -152,9 +161,93 @@ export async function attachHairstyleImageIdempotently(
       where: { storageKey },
       select: adminMediaSelect,
     });
-    if (afterRace) return existingImageAttachment(afterRace, input.hairstyleId, hairstyleVariantId, deliveryUrl);
+    if (afterRace) {
+      await reconcileExistingImageCleanup(afterRace, input.hairstyleId, hairstyleVariantId, deliveryUrl);
+      return existingImageAttachment(afterRace, input.hairstyleId, hairstyleVariantId, deliveryUrl);
+    }
     throw error;
   }
+}
+
+/**
+ * Atomically replaces one gallery image after its immutable Blob has already
+ * been verified. The old public row remains intact unless the new row and its
+ * durable deletion task both commit.
+ */
+export async function replaceHairstyleImageIdempotently(
+  input: ReplaceHairstyleImageInput,
+): Promise<IdempotentImageAttachment> {
+  const hairstyleVariantId = normalizeGalleryVariantId(input.hairstyleVariantId);
+  const storageKey = normalizeStorageKey(input.storageKey);
+  const deliveryUrl = normalizeDeliveryUrl(input.deliveryUrl);
+  const expectedStorageKey = normalizeStorageKey(input.expectedTargetStorageKey);
+
+  return prisma.$transaction(async (tx) => {
+    await lockHairstyle(tx, input.hairstyleId);
+    await assertVariantBelongsToHairstyle(tx, input.hairstyleId, hairstyleVariantId);
+
+    const alreadyAttached = await tx.hairstyleMedia.findUnique({
+      where: { storageKey },
+      select: adminMediaSelect,
+    });
+    if (alreadyAttached) {
+      const priorCleanup = await tx.hairstyleMediaCleanupTask.findUnique({
+        where: { storageKey_operation: { storageKey: expectedStorageKey, operation: "DELETE_BLOB" } },
+        select: { sourceMediaId: true },
+      });
+      if (
+        priorCleanup?.sourceMediaId === input.targetMediaId &&
+        alreadyAttached.hairstyleId === input.hairstyleId &&
+        alreadyAttached.hairstyleVariantId === hairstyleVariantId &&
+        alreadyAttached.type === "IMAGE" &&
+        alreadyAttached.deliveryUrl === deliveryUrl
+      ) {
+        return { media: alreadyAttached, created: false };
+      }
+      throw new CatalogError("STORAGE_KEY_ALREADY_EXISTS", "The replacement image is already attached elsewhere.");
+    }
+
+    const authorizedCleanup = await lockCleanupTask(tx, storageKey);
+    assertCleanupAllowsAttachment(authorizedCleanup);
+    if (!authorizedCleanup) {
+      throw new CatalogError("STORAGE_KEY_TOMBSTONED", "The replacement upload authorization is no longer active.");
+    }
+
+    const target = await tx.hairstyleMedia.findFirst({
+      where: {
+        id: input.targetMediaId,
+        hairstyleId: input.hairstyleId,
+        hairstyleVariantId,
+        type: "IMAGE",
+      },
+      select: adminMediaSelect,
+    });
+    if (
+      !target ||
+      target.storageKey !== expectedStorageKey ||
+      target.updatedAt.getTime() !== input.expectedTargetUpdatedAt.getTime()
+    ) {
+      throw new CatalogError("STALE_MEDIA_REPLACEMENT", "This photo changed after replacement began.");
+    }
+
+    const replacement = await tx.hairstyleMedia.create({
+      data: {
+        hairstyleId: target.hairstyleId,
+        hairstyleVariantId: target.hairstyleVariantId,
+        type: "IMAGE",
+        storageKey,
+        deliveryUrl,
+        altText: target.altText,
+        caption: target.caption,
+        sortOrder: target.sortOrder,
+      },
+      select: adminMediaSelect,
+    });
+    await tx.hairstyleMedia.delete({ where: { id: target.id } });
+    await rearmCleanupTask(tx, target.hairstyleId, target.id, target.storageKey);
+    await tx.hairstyleMediaCleanupTask.delete({ where: { id: authorizedCleanup.id } });
+    return { media: replacement, created: true };
+  });
 }
 
 function existingImageAttachment(
@@ -211,6 +304,9 @@ async function insertMediaWithinLimit(
       await lockHairstyle(tx, data.hairstyleId);
       await assertVariantBelongsToHairstyle(tx, data.hairstyleId, data.hairstyleVariantId);
 
+      const cleanupTask = await lockCleanupTask(tx, data.storageKey);
+      assertCleanupAllowsAttachment(cleanupTask);
+
       const existingOfType = await tx.hairstyleMedia.count({
         where: { hairstyleId: data.hairstyleId, hairstyleVariantId: data.hairstyleVariantId, type },
       });
@@ -227,10 +323,12 @@ async function insertMediaWithinLimit(
         _max: { sortOrder: true },
       });
 
-      return tx.hairstyleMedia.create({
+      const created = await tx.hairstyleMedia.create({
         data: { ...data, sortOrder: (last._max.sortOrder ?? -1) + 1 },
         select: adminMediaSelect,
       });
+      if (cleanupTask) await tx.hairstyleMediaCleanupTask.delete({ where: { id: cleanupTask.id } });
+      return created;
     });
   } catch (error) {
     if (isUniqueViolationOn(error, "storageKey")) {
@@ -241,6 +339,70 @@ async function insertMediaWithinLimit(
     }
     throw error;
   }
+}
+
+type LockedCleanupTask = {
+  id: string;
+  sourceMediaId: string | null;
+  state: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+};
+
+async function lockCleanupTask(tx: Prisma.TransactionClient, storageKey: string): Promise<LockedCleanupTask | null> {
+  const rows = await tx.$queryRaw<LockedCleanupTask[]>`
+    SELECT "id", "sourceMediaId", "state"
+    FROM "HairstyleMediaCleanupTask"
+    WHERE "storageKey" = ${storageKey}
+      AND "operation" = 'DELETE_BLOB'::"HairstyleMediaCleanupOperation"
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
+}
+
+function assertCleanupAllowsAttachment(task: LockedCleanupTask | null) {
+  if (!task) return;
+  if (task.sourceMediaId === null && task.state === "PENDING") return;
+  throw new CatalogError("STORAGE_KEY_TOMBSTONED", "This stored object is already scheduled for deletion.");
+}
+
+async function reconcileExistingImageCleanup(
+  existing: AdminMedia,
+  hairstyleId: string,
+  hairstyleVariantId: string | null,
+  deliveryUrl: string | null,
+) {
+  existingImageAttachment(existing, hairstyleId, hairstyleVariantId, deliveryUrl);
+  await prisma.$transaction(async (tx) => {
+    await lockHairstyle(tx, hairstyleId);
+    const task = await lockCleanupTask(tx, existing.storageKey);
+    if (!task) return;
+    if (task.sourceMediaId !== null || task.state === "PROCESSING") {
+      throw new CatalogError("STORAGE_KEY_TOMBSTONED", "This stored object is already scheduled for deletion.");
+    }
+    await tx.hairstyleMediaCleanupTask.delete({ where: { id: task.id } });
+  });
+}
+
+async function rearmCleanupTask(
+  tx: Prisma.TransactionClient,
+  hairstyleId: string,
+  sourceMediaId: string,
+  storageKey: string,
+) {
+  await tx.hairstyleMediaCleanupTask.upsert({
+    where: { storageKey_operation: { storageKey, operation: "DELETE_BLOB" } },
+    create: { hairstyleId, sourceMediaId, storageKey },
+    update: {
+      hairstyleId,
+      sourceMediaId,
+      state: "PENDING",
+      attemptCount: 0,
+      lastFailure: null,
+      nextAttemptAt: new Date(0),
+      leaseToken: null,
+      leasedAt: null,
+      completedAt: null,
+    },
+  });
 }
 
 /**

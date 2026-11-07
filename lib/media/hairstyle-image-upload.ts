@@ -7,10 +7,18 @@ export type HairstyleImageContentType = (typeof HAIRSTYLE_IMAGE_CONTENT_TYPES)[n
 
 export const MAX_HAIRSTYLE_IMAGE_BYTES = 10 * 1024 * 1024;
 export const UPLOAD_INTENT_TTL_MS = 15 * 60 * 1000;
+export const UPLOAD_COMPLETION_GRACE_MS = 60 * 60 * 1000;
+/** Cleanup starts only after every valid browser/provider completion has expired. */
+export const AUTHORIZED_UPLOAD_CLEANUP_DELAY_MS = UPLOAD_INTENT_TTL_MS + UPLOAD_COMPLETION_GRACE_MS + 5 * 60 * 1000;
 
-const UPLOAD_INTENT_VERSION = 2;
+const UPLOAD_INTENT_VERSION = 3;
 const LEGACY_UPLOAD_INTENT_VERSION = 1;
-const COMPLETION_GRACE_MS = 60 * 60 * 1000;
+
+export type HairstyleImageReplacementTarget = {
+  mediaId: string;
+  storageKey: string;
+  updatedAt: string;
+};
 
 export type BlobStorageConfig = {
   token: string;
@@ -24,6 +32,7 @@ export type HairstyleImageUploadIntent = {
   pathname: string;
   contentType: HairstyleImageContentType;
   validUntil: number;
+  replacement: HairstyleImageReplacementTarget | null;
   clientPayload: string;
 };
 
@@ -66,15 +75,26 @@ type VariantSignedIntent = {
   validUntil: number;
 };
 
-type SignedIntent = LegacySignedIntent | VariantSignedIntent;
-
-type VerifiedSignedIntent = {
-  v: 1 | 2;
+type ReplacementSignedIntent = {
+  v: 3;
   hairstyleId: string;
   hairstyleVariantId: string | null;
   pathname: string;
   contentType: HairstyleImageContentType;
   validUntil: number;
+  replacement: HairstyleImageReplacementTarget | null;
+};
+
+type SignedIntent = LegacySignedIntent | VariantSignedIntent | ReplacementSignedIntent;
+
+type VerifiedSignedIntent = {
+  v: 1 | 2 | 3;
+  hairstyleId: string;
+  hairstyleVariantId: string | null;
+  pathname: string;
+  contentType: HairstyleImageContentType;
+  validUntil: number;
+  replacement: HairstyleImageReplacementTarget | null;
 };
 
 function isImageContentType(value: unknown): value is HairstyleImageContentType {
@@ -123,7 +143,12 @@ export function loadBlobStorageConfig(
  */
 export function issueHairstyleImageUploadIntent(
   config: BlobStorageConfig,
-  input: { hairstyleId: string; hairstyleVariantId?: string | null; contentType: unknown },
+  input: {
+    hairstyleId: string;
+    hairstyleVariantId?: string | null;
+    contentType: unknown;
+    replacement?: HairstyleImageReplacementTarget | null;
+  },
   options: { now?: number; randomId?: () => string } = {},
 ): HairstyleImageUploadIntent {
   if (typeof input.hairstyleId !== "string" || input.hairstyleId.trim().length === 0 || !isImageContentType(input.contentType)) {
@@ -133,6 +158,7 @@ export function issueHairstyleImageUploadIntent(
   const hairstyleVariantId = normalizeVariantId(input.hairstyleVariantId);
   const now = options.now ?? Date.now();
   const validUntil = now + UPLOAD_INTENT_TTL_MS;
+  const replacement = normalizeReplacementTarget(input.replacement);
   const directory = hairstyleVariantId === null
     ? `hairstyles/${hairstyleId}`
     : `hairstyles/${hairstyleId}/variants/${hairstyleVariantId}`;
@@ -144,6 +170,7 @@ export function issueHairstyleImageUploadIntent(
     pathname,
     contentType: input.contentType,
     validUntil,
+    replacement,
   };
   const encoded = encode(signed);
   return { ...signed, clientPayload: `${encoded}.${sign(encoded, config.token)}` };
@@ -179,8 +206,15 @@ function readIntent(clientPayload: unknown, config: BlobStorageConfig): SignedIn
         validUntil: decoded.validUntil as number,
       };
     }
-    if (decoded.v === UPLOAD_INTENT_VERSION && (decoded.hairstyleVariantId === null || isVariantId(decoded.hairstyleVariantId))) {
+    if (decoded.v === 2 && (decoded.hairstyleVariantId === null || isVariantId(decoded.hairstyleVariantId))) {
       return decoded as VariantSignedIntent;
+    }
+    if (
+      decoded.v === UPLOAD_INTENT_VERSION &&
+      (decoded.hairstyleVariantId === null || isVariantId(decoded.hairstyleVariantId)) &&
+      isReplacementTarget(decoded.replacement)
+    ) {
+      return decoded as ReplacementSignedIntent;
     }
     throw new Error("invalid");
   } catch {
@@ -196,11 +230,12 @@ export function verifyHairstyleImageUploadIntent(
 ): VerifiedSignedIntent {
   const intent = readIntent(clientPayload, config);
   const now = options.now ?? Date.now();
-  const deadline = intent.validUntil + (options.completion ? COMPLETION_GRACE_MS : 0);
+  const deadline = intent.validUntil + (options.completion ? UPLOAD_COMPLETION_GRACE_MS : 0);
   if (now > deadline) {
     throw new HairstyleImageUploadError("UPLOAD_INTENT_EXPIRED", "This image upload authorization has expired.");
   }
   const hairstyleVariantId = intent.v === LEGACY_UPLOAD_INTENT_VERSION ? null : intent.hairstyleVariantId;
+  const replacement = intent.v === UPLOAD_INTENT_VERSION ? intent.replacement : null;
   if (
     intent.hairstyleId !== expected.hairstyleId ||
     (expected.hairstyleVariantId !== undefined && hairstyleVariantId !== expected.hairstyleVariantId) ||
@@ -215,6 +250,29 @@ export function verifyHairstyleImageUploadIntent(
     pathname: intent.pathname,
     contentType: intent.contentType,
     validUntil: intent.validUntil,
+    replacement,
+  };
+}
+
+function isReplacementTarget(value: unknown): value is HairstyleImageReplacementTarget | null {
+  if (value === null) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const target = value as Record<string, unknown>;
+  return Object.keys(target).length === 3 &&
+    typeof target.mediaId === "string" && target.mediaId.trim().length > 0 &&
+    typeof target.storageKey === "string" && target.storageKey.trim().length > 0 &&
+    typeof target.updatedAt === "string" && !Number.isNaN(Date.parse(target.updatedAt));
+}
+
+function normalizeReplacementTarget(value: unknown): HairstyleImageReplacementTarget | null {
+  if (value === undefined || value === null) return null;
+  if (!isReplacementTarget(value) || value === null) {
+    throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The replacement upload request is invalid.");
+  }
+  return {
+    mediaId: value.mediaId.trim(),
+    storageKey: value.storageKey.trim(),
+    updatedAt: new Date(value.updatedAt).toISOString(),
   };
 }
 

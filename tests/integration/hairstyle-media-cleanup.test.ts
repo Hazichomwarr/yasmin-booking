@@ -157,7 +157,73 @@ describe("hairstyle media durable cleanup", { skip: integrationSkip }, () => {
     await prisma.hairstyleMediaCleanupTask.updateMany({ where: { storageKey: "hairstyles/fence/attached.jpg" }, data: { nextAttemptAt: new Date(0) } });
     const protectedBlob = fakeBlob();
     const result = await runHairstyleMediaCleanup({ blob: protectedBlob.gateway });
-    assert.equal(result.skipped, 1);
+    assert.equal(result.processed, 0);
+    assert.equal(protectedBlob.calls(), 0);
+    assert.equal(
+      await prisma.hairstyleMediaCleanupTask.count({
+        where: { storageKey: "hairstyles/fence/attached.jpg" },
+      }),
+      0,
+    );
+  });
+
+  it("fences attachment after a worker claim and rejects reattachment of an explicitly removed key", async () => {
+    const first = await style("AttachFence");
+    const racingKey = "hairstyles/attach-fence/racing.jpg";
+    await queueUnattachedHairstyleImageCleanup(first.id, racingKey);
+    await prisma.hairstyleMediaCleanupTask.updateMany({ where: { storageKey: racingKey }, data: { nextAttemptAt: new Date(0) } });
+    let release!: () => void;
+    let claimed!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    const claimReady = new Promise<void>((resolve) => { claimed = resolve; });
+    const deleting = fakeBlob();
+    const run = runHairstyleMediaCleanup({
+      blob: deleting.gateway,
+      limit: 1,
+      afterClaim: async () => { claimed(); await paused; },
+    });
+    await claimReady;
+    await assert.rejects(
+      attachHairstyleImage({ hairstyleId: first.id, storageKey: racingKey }),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "STORAGE_KEY_TOMBSTONED",
+    );
+    release();
+    assert.equal((await run).completed, 1);
+    assert.equal(deleting.calls(), 1);
+
+    const removable = await attachHairstyleImage({ hairstyleId: first.id, storageKey: "hairstyles/attach-fence/removed.jpg" });
+    await removeHairstyleImageAndQueueCleanup(first.id, removable.id);
+    await assert.rejects(
+      attachHairstyleImage({ hairstyleId: first.id, storageKey: removable.storageKey }),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "STORAGE_KEY_TOMBSTONED",
+    );
+  });
+
+  it("cancels obsolete orphan tasks, allows later deletion, and protects shared canonical URLs", async () => {
+    const first = await style("Requeue");
+    const attached = await attachHairstyleImage({ hairstyleId: first.id, storageKey: "hairstyles/requeue/attached.jpg" });
+    await queueUnattachedHairstyleImageCleanup(first.id, attached.storageKey);
+    await prisma.hairstyleMediaCleanupTask.updateMany({ where: { storageKey: attached.storageKey }, data: { nextAttemptAt: new Date(0) } });
+    const skippedBlob = fakeBlob();
+    assert.equal((await runHairstyleMediaCleanup({ blob: skippedBlob.gateway })).skipped, 1);
+    assert.equal(skippedBlob.calls(), 0);
+    assert.equal(await prisma.hairstyleMediaCleanupTask.count({ where: { storageKey: attached.storageKey } }), 0);
+
+    await removeHairstyleImageAndQueueCleanup(first.id, attached.id);
+    const deletedBlob = fakeBlob();
+    assert.equal((await runHairstyleMediaCleanup({ blob: deletedBlob.gateway })).completed, 1);
+    assert.equal(deletedBlob.calls(), 1);
+
+    const canonicalKey = "hairstyles/requeue/shared.jpg";
+    await attachHairstyleImage({
+      hairstyleId: first.id,
+      storageKey: "legacy/alias-for-shared.jpg",
+      deliveryUrl: `https://store.public.blob.vercel-storage.com/${canonicalKey}`,
+    });
+    await queueUnattachedHairstyleImageCleanup(first.id, canonicalKey);
+    await prisma.hairstyleMediaCleanupTask.updateMany({ where: { storageKey: canonicalKey }, data: { nextAttemptAt: new Date(0) } });
+    const protectedBlob = fakeBlob();
+    assert.equal((await runHairstyleMediaCleanup({ blob: protectedBlob.gateway })).skipped, 1);
     assert.equal(protectedBlob.calls(), 0);
   });
 

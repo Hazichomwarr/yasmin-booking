@@ -10,7 +10,10 @@ import {
   createHairstyle,
   createHairstyleVariant,
   listHairstyleMedia,
+  listPublicHomepageFeatures,
   listPublicHairstyles,
+  readHomepageFeatureAdminState,
+  replaceHomepageFeatures,
 } from "@/lib/catalog";
 import { patchHairstyleMediaApi } from "@/lib/http/admin-hairstyle-media-api";
 import {
@@ -131,6 +134,8 @@ function deps(
     getHairstyle: (id) => import("@/lib/catalog").then(({ getHairstyleDetailForAdmin }) => getHairstyleDetailForAdmin(id)),
     listMedia: (hairstyleId, hairstyleVariantId) => import("@/lib/catalog").then(({ listHairstyleMedia }) => listHairstyleMedia(hairstyleId, hairstyleVariantId)),
     attachImage: (input) => import("@/lib/catalog").then(({ attachHairstyleImageIdempotently }) => attachHairstyleImageIdempotently(input)),
+    replaceImage: (input) => import("@/lib/catalog").then(({ replaceHairstyleImageIdempotently }) => replaceHairstyleImageIdempotently(input)),
+    queueAuthorizedCleanup: (hairstyleId, storageKey, nextAttemptAt) => import("@/lib/media/hairstyle-media-cleanup").then(({ queueAuthorizedHairstyleImageCleanup }) => queueAuthorizedHairstyleImageCleanup(hairstyleId, storageKey, nextAttemptAt)),
     queueUnattachedCleanup: (hairstyleId, storageKey) => import("@/lib/media/hairstyle-media-cleanup").then(({ queueUnattachedHairstyleImageCleanup }) => queueUnattachedHairstyleImageCleanup(hairstyleId, storageKey)),
     blob,
     log: () => {},
@@ -157,11 +162,16 @@ async function issue(
   contentType = "image/jpeg",
   blob = fakeBlob().gateway,
   hairstyleVariantId?: string,
+  replacementMediaId?: string,
 ) {
   const response = await createHairstyleImageUploadIntentApi(
     jsonRequest(
       `${ORIGIN}/api/admin/hairstyles/${styleId}/media/upload-intent`,
-      hairstyleVariantId ? { contentType, hairstyleVariantId } : { contentType },
+      {
+        contentType,
+        ...(hairstyleVariantId ? { hairstyleVariantId } : {}),
+        ...(replacementMediaId ? { replacementMediaId } : {}),
+      },
       token,
     ),
     styleId,
@@ -219,6 +229,11 @@ describe("admin hairstyle image upload", { skip: integrationSkip }, () => {
     const created = await issue(style.id, token, "image/jpeg", normal.gateway);
     assert.equal(created.response.status, 201);
     const intent = created.json;
+    const abandonmentTask = await prisma.hairstyleMediaCleanupTask.findUniqueOrThrow({
+      where: { storageKey_operation: { storageKey: intent.pathname, operation: "DELETE_BLOB" } },
+    });
+    assert.equal(abandonmentTask.sourceMediaId, null);
+    assert.ok(abandonmentTask.nextAttemptAt.getTime() > intent.validUntil);
 
     const validToken = await handleHairstyleImageUploadApi(
       jsonRequest(absoluteUploadUrl(intent), uploadBody(intent.pathname, intent.clientPayload), token),
@@ -250,6 +265,7 @@ describe("admin hairstyle image upload", { skip: integrationSkip }, () => {
     assert.equal(completed.status, 200);
     assert.equal(retried.status, 200);
     assert.equal(await prisma.hairstyleMedia.count({ where: { hairstyleId: style.id } }), 1);
+    assert.equal(await prisma.hairstyleMediaCleanupTask.count({ where: { storageKey: intent.pathname } }), 0);
   });
 
   it("rejects cross-hairstyle completion and preserves the eight-image limit under concurrent authorizations", async () => {
@@ -343,6 +359,83 @@ describe("admin hairstyle image upload", { skip: integrationSkip }, () => {
       isDeliveryUrlAllowed: (url) => isApprovedBlobDeliveryUrl(url, process.env.BLOB_PUBLIC_BASE_URL),
     });
     assert.equal(publicStyle?.coverImage?.deliveryUrl, blobUrl(first.json));
+  });
+
+  it("atomically replaces a full-gallery cover, preserves metadata and position, and resolves the new public/homepage image", async () => {
+    const token = await signedIn();
+    const style = await hairstyle("Replacement Cover");
+    const old = await attachHairstyleImage({
+      hairstyleId: style.id,
+      storageKey: "hairstyles/replacement/old.jpg",
+      deliveryUrl: "https://store.public.blob.vercel-storage.com/hairstyles/replacement/old.jpg",
+      altText: "Finished braids",
+      caption: "Salon portfolio",
+    });
+    for (let index = 1; index < 8; index += 1) {
+      await attachHairstyleImage({ hairstyleId: style.id, storageKey: `hairstyles/replacement/${index}.jpg` });
+    }
+    const blob = fakeBlob();
+    const issued = await issue(style.id, token, "image/webp", blob.gateway, undefined, old.id);
+    assert.equal(issued.response.status, 201, "replacement remains available at the eight-image limit");
+
+    const completed = await confirm(style.id, issued.json, token, blob.gateway);
+    assert.equal(completed.status, 200);
+    const replacement = (await completed.json() as { media: { id: string; sortOrder: number; altText: string; caption: string } }).media;
+    assert.notEqual(replacement.id, old.id);
+    assert.deepEqual([replacement.sortOrder, replacement.altText, replacement.caption], [old.sortOrder, old.altText, old.caption]);
+    assert.equal(await prisma.hairstyleMedia.count({ where: { hairstyleId: style.id, type: "IMAGE" } }), 8);
+    assert.equal(await prisma.hairstyleMedia.count({ where: { id: old.id } }), 0);
+    assert.equal(await prisma.hairstyleMediaCleanupTask.count({ where: { sourceMediaId: old.id, storageKey: old.storageKey, state: "PENDING" } }), 1);
+
+    const retried = await confirm(style.id, issued.json, token, blob.gateway);
+    assert.equal(retried.status, 200);
+    assert.equal((await retried.json() as { media: { id: string } }).media.id, replacement.id);
+    assert.equal(await prisma.hairstyleMedia.count({ where: { hairstyleId: style.id, type: "IMAGE" } }), 8);
+
+    const [publicStyle] = await listPublicHairstyles({}, {
+      isDeliveryUrlAllowed: (url) => isApprovedBlobDeliveryUrl(url, process.env.BLOB_PUBLIC_BASE_URL),
+    });
+    assert.equal(publicStyle?.coverImage?.deliveryUrl, blobUrl(issued.json));
+    const featureState = await readHomepageFeatureAdminState();
+    await replaceHomepageFeatures([{ hairstyleId: style.id, hairstyleVariantId: null }], featureState.revision);
+    assert.equal((await listPublicHomepageFeatures())[0]?.coverImage?.deliveryUrl, blobUrl(issued.json));
+  });
+
+  it("rejects stale, cross-gallery, and concurrent replacements while keeping the current photo", async () => {
+    const token = await signedIn();
+    const style = await hairstyle("Replacement Conflict", true);
+    const variant = await createHairstyleVariant({ hairstyleId: style.id, name: "Small", priceCents: 24_000 });
+    const old = await attachHairstyleImage({
+      hairstyleId: style.id,
+      storageKey: "hairstyles/conflict/old.jpg",
+      deliveryUrl: "https://store.public.blob.vercel-storage.com/hairstyles/conflict/old.jpg",
+    });
+    const crossGallery = await issue(style.id, token, "image/jpeg", fakeBlob().gateway, variant.id, old.id);
+    assert.equal(crossGallery.response.status, 404);
+    const other = await hairstyle("Replacement Other");
+    assert.equal((await issue(other.id, token, "image/jpeg", fakeBlob().gateway, undefined, old.id)).response.status, 404);
+
+    const staleBlob = fakeBlob();
+    const stale = await issue(style.id, token, "image/jpeg", staleBlob.gateway, undefined, old.id);
+    assert.equal(stale.response.status, 201);
+    assert.equal((await patchGallery(style.id, token, { kind: "metadata", mediaId: old.id, altText: "Changed after authorization" })).status, 200);
+    assert.equal((await confirm(style.id, stale.json, token, staleBlob.gateway)).status, 409);
+    assert.equal(await prisma.hairstyleMedia.count({ where: { id: old.id } }), 1);
+
+    const current = await prisma.hairstyleMedia.findUniqueOrThrow({ where: { id: old.id } });
+    const leftBlob = fakeBlob();
+    const rightBlob = fakeBlob();
+    const left = await issue(style.id, token, "image/png", leftBlob.gateway, undefined, current.id);
+    const right = await issue(style.id, token, "image/webp", rightBlob.gateway, undefined, current.id);
+    const results = await Promise.all([
+      confirm(style.id, left.json, token, leftBlob.gateway),
+      confirm(style.id, right.json, token, rightBlob.gateway),
+    ]);
+    assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
+    assert.equal(await prisma.hairstyleMedia.count({ where: { hairstyleId: style.id, type: "IMAGE" } }), 1);
+    assert.equal(await prisma.hairstyleMediaCleanupTask.count({ where: { sourceMediaId: old.id } }), 1);
+    const losingIntent = results[0]?.status === 409 ? left.json : right.json;
+    assert.equal(await prisma.hairstyleMediaCleanupTask.count({ where: { storageKey: losingIntent.pathname, state: "PENDING" } }), 1);
   });
 
   it("binds variant uploads to the signed variant gallery and keeps late callbacks idempotent", async () => {

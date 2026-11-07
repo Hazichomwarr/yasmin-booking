@@ -20,6 +20,7 @@ export type ServicePhoto = {
 /** An object already in Blob storage; retries re-confirm it instead of uploading a duplicate. */
 type UploadedObject = { url: string; clientPayload: string; confirmUrl: string };
 type UploadRow = { key: string; file: File; previewUrl: string; status: "ready" | "uploading" | "complete" | "failed"; progress: number; message?: string; uploaded?: UploadedObject };
+type ReplacementRow = UploadRow & { targetMediaId: string };
 type Intent = { pathname: string; clientPayload: string; uploadUrl: string; confirmUrl: string };
 
 const MAX_IMAGES = 8;
@@ -68,11 +69,19 @@ export function AdminServicePhotoGallery({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [replacement, setReplacement] = useState<ReplacementRow | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const replacementInput = useRef<HTMLInputElement>(null);
+  const replacementTarget = useRef<string | null>(null);
   const uploadsRef = useRef<UploadRow[]>([]);
 
   useEffect(() => { uploadsRef.current = uploads; }, [uploads]);
-  useEffect(() => () => uploadsRef.current.forEach((row) => URL.revokeObjectURL(row.previewUrl)), []);
+  const replacementRef = useRef<ReplacementRow | null>(null);
+  useEffect(() => { replacementRef.current = replacement; }, [replacement]);
+  useEffect(() => () => {
+    uploadsRef.current.forEach((row) => URL.revokeObjectURL(row.previewUrl));
+    if (replacementRef.current) URL.revokeObjectURL(replacementRef.current.previewUrl);
+  }, []);
 
   const photos = useMemo(() => media.filter((item) => item.type === "IMAGE").sort((a, b) => a.sortOrder - b.sortOrder), [media]);
   const usableCover = photos.find((item) => item.deliveryUrl !== null)?.id ?? null;
@@ -96,8 +105,16 @@ export function AdminServicePhotoGallery({
     setUploads((current) => current.map((row) => row.key === key ? { ...row, ...update } : row));
   }
 
-  async function uploadOne(row: UploadRow): Promise<boolean> {
-    updateUpload(row.key, { status: "uploading", progress: row.uploaded ? 100 : 1, message: undefined });
+  function updateTransfer(row: UploadRow, update: Partial<UploadRow>, targetMediaId?: string) {
+    if (targetMediaId) {
+      setReplacement((current) => current?.key === row.key ? { ...current, ...update } : current);
+    } else {
+      updateUpload(row.key, update);
+    }
+  }
+
+  async function uploadOne(row: UploadRow, targetMediaId?: string): Promise<boolean> {
+    updateTransfer(row, { status: "uploading", progress: row.uploaded ? 100 : 1, message: undefined }, targetMediaId);
     let uploaded = row.uploaded;
     try {
       if (!uploaded) {
@@ -105,6 +122,7 @@ export function AdminServicePhotoGallery({
           method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
             contentType: row.file.type,
             ...(hairstyleVariantId ? { hairstyleVariantId } : {}),
+            ...(targetMediaId ? { replacementMediaId: targetMediaId } : {}),
           }),
         });
         if (!intentResponse.ok) throw new Error(await errorMessage(intentResponse));
@@ -116,13 +134,13 @@ export function AdminServicePhotoGallery({
             contentType: row.file.type,
             handleUploadUrl: intent.uploadUrl,
             clientPayload: intent.clientPayload,
-            onUploadProgress: ({ percentage }) => updateUpload(row.key, { progress: Math.max(1, Math.round(percentage)) }),
+            onUploadProgress: ({ percentage }) => updateTransfer(row, { progress: Math.max(1, Math.round(percentage)) }, targetMediaId),
           });
         } catch (caught) {
           throw new Error(`The photo could not be sent to storage${caught instanceof Error && caught.message ? ` (${caught.message})` : ""}. Check your connection and retry.`);
         }
         uploaded = { url: blob.url, clientPayload: intent.clientPayload, confirmUrl: intent.confirmUrl };
-        updateUpload(row.key, { uploaded });
+        updateTransfer(row, { uploaded }, targetMediaId);
       }
       // Storage alone is not success: the photo exists only once the server attaches it.
       const confirmResponse = await fetch(uploaded.confirmUrl, {
@@ -130,13 +148,54 @@ export function AdminServicePhotoGallery({
       });
       if (!confirmResponse.ok) throw new Error(await errorMessage(confirmResponse));
       const payload = await confirmResponse.json() as { media: ServicePhoto };
-      setMedia((current) => [...current.filter((item) => item.id !== payload.media.id), payload.media]);
-      updateUpload(row.key, { status: "complete", progress: 100, message: "Attached to gallery" });
+      setMedia((current) => targetMediaId
+        ? current.map((item) => item.id === targetMediaId ? payload.media : item)
+        : [...current.filter((item) => item.id !== payload.media.id), payload.media]);
+      updateTransfer(row, { status: "complete", progress: 100, message: targetMediaId ? "Replacement saved" : "Attached to gallery" }, targetMediaId);
       return true;
     } catch (caught) {
-      updateUpload(row.key, { status: "failed", message: caught instanceof Error ? caught.message : "Upload failed." });
+      updateTransfer(row, { status: "failed", message: caught instanceof Error ? caught.message : "Upload failed." }, targetMediaId);
       return false;
     }
+  }
+
+  async function replaceSelected(row: ReplacementRow) {
+    if (busy) return;
+    setBusy(true); setError(null); setMessage(null);
+    const replaced = await uploadOne(row, row.targetMediaId);
+    setBusy(false);
+    if (replaced) {
+      URL.revokeObjectURL(row.previewUrl);
+      setReplacement(null);
+      setMessage("Photo replaced. The previous stored image was queued for secure cleanup.");
+      router.refresh();
+    }
+  }
+
+  function selectReplacementFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const targetMediaId = replacementTarget.current;
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!targetMediaId || !file) return;
+    if (!IMAGE_TYPES.has(file.type)) {
+      setError(`${file.name}: choose JPEG, PNG, or WebP.`);
+      return;
+    }
+    if (file.size > MAX_BYTES) {
+      setError(`${file.name}: images must be 10 MB or smaller.`);
+      return;
+    }
+    if (replacement) URL.revokeObjectURL(replacement.previewUrl);
+    const row: ReplacementRow = {
+      key: crypto.randomUUID(),
+      targetMediaId,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: "ready",
+      progress: 0,
+    };
+    setReplacement(row);
+    void replaceSelected(row);
   }
 
   async function uploadSelected() {
@@ -228,6 +287,7 @@ export function AdminServicePhotoGallery({
   return <section className={styles.photoGallery} aria-labelledby={`photos-heading-${hairstyleVariantId ?? "service"}`}>
     <div className={styles.variantHeading}><div><p className={styles.eyebrow}>Portfolio</p><h2 id={`photos-heading-${hairstyleVariantId ?? "service"}`}>{heading}</h2><p>{help}</p></div><button type="button" className={styles.secondary} onClick={() => input.current?.click()} disabled={busy || available <= 0}>Select photos</button></div>
     <input ref={input} className={styles.visuallyHidden} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={selectFiles} disabled={busy || available <= 0} />
+    <input ref={replacementInput} className={styles.visuallyHidden} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectReplacementFile} disabled={busy} />
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
     {message ? <p className={styles.actionMessage} role="status">{message}</p> : null}
     {uploads.length ? <div className={styles.pendingUploads}>{uploads.map((row) => <div className={styles.pendingUpload} key={row.key}><img src={row.previewUrl} alt="" /><div><strong>{row.file.name}</strong><span>{row.status === "uploading" ? `Uploading ${row.progress}%` : row.message ?? "Ready to upload"}</span></div>{row.status !== "uploading" && row.status !== "complete" ? <button type="button" className={styles.inlineButton} onClick={() => setUploads((current) => current.filter((item) => item.key !== row.key))}>Remove</button> : null}</div>)}</div> : null}
@@ -237,7 +297,8 @@ export function AdminServicePhotoGallery({
       <div className={styles.photoControls}>
         <label className={styles.actionLabel}>Alt text <span className={styles.fieldHint}>Optional</span><input value={photo.altText ?? ""} onChange={(event) => setMedia((current) => current.map((item) => item.id === photo.id ? { ...item, altText: event.target.value } : item))} maxLength={500} disabled={busy} /></label>
         <label className={styles.actionLabel}>Caption <span className={styles.fieldHint}>Optional</span><textarea value={photo.caption ?? ""} onChange={(event) => setMedia((current) => current.map((item) => item.id === photo.id ? { ...item, caption: event.target.value } : item))} maxLength={1000} disabled={busy} /></label>
-        <div className={styles.photoActions}><button type="button" className={styles.secondary} disabled={busy} onClick={() => saveMetadata(photo)}>Save details</button><button type="button" className={styles.inlineButton} disabled={busy || index === 0} onClick={() => order(photos.map((item, position) => position === index ? photos[index - 1]! : position === index - 1 ? photo : item))}>Move left</button><button type="button" className={styles.inlineButton} disabled={busy || index === photos.length - 1} onClick={() => order(photos.map((item, position) => position === index ? photos[index + 1]! : position === index + 1 ? photo : item))}>Move right</button><button type="button" className={styles.inlineButton} disabled={busy || photo.id === usableCover} onClick={() => order([photo, ...photos.filter((item) => item.id !== photo.id)])}>Make cover photo</button><button type="button" className={styles.danger} disabled={busy} onClick={() => setRemoving(photo.id)}>Remove</button></div>
+        <div className={styles.photoActions}><button type="button" className={styles.secondary} disabled={busy} onClick={() => saveMetadata(photo)}>Save details</button><button type="button" className={styles.secondary} disabled={busy} onClick={() => { replacementTarget.current = photo.id; replacementInput.current?.click(); }}>Replace photo</button><button type="button" className={styles.inlineButton} disabled={busy || index === 0} onClick={() => order(photos.map((item, position) => position === index ? photos[index - 1]! : position === index - 1 ? photo : item))}>Move left</button><button type="button" className={styles.inlineButton} disabled={busy || index === photos.length - 1} onClick={() => order(photos.map((item, position) => position === index ? photos[index + 1]! : position === index + 1 ? photo : item))}>Move right</button><button type="button" className={styles.inlineButton} disabled={busy || photo.id === usableCover} onClick={() => order([photo, ...photos.filter((item) => item.id !== photo.id)])}>Make cover photo</button><button type="button" className={styles.danger} disabled={busy} onClick={() => setRemoving(photo.id)}>Remove</button></div>
+        {replacement?.targetMediaId === photo.id ? <div className={styles.replacementUpload} role="status"><img src={replacement.previewUrl} alt="" /><div><strong>{replacement.file.name}</strong><span>{replacement.status === "uploading" ? `Uploading replacement ${replacement.progress}%` : replacement.message ?? "Ready to replace"}</span></div>{replacement.status === "failed" ? <><button type="button" className={styles.secondary} onClick={() => void replaceSelected(replacement)} disabled={busy}>Retry</button><button type="button" className={styles.inlineButton} onClick={() => { URL.revokeObjectURL(replacement.previewUrl); setReplacement(null); }} disabled={busy}>Cancel</button></> : null}</div> : null}
       </div>
     </article>)}</div>}
     {removing ? <RemoveDialog onCancel={() => setRemoving(null)} onConfirm={() => { const photo = photos.find((item) => item.id === removing); if (photo) void removePhoto(photo); }} /> : null}

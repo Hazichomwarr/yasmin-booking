@@ -8,10 +8,12 @@ import {
   isCatalogError,
   listHairstyleMedia,
   MEDIA_LIMITS,
+  replaceHairstyleImageIdempotently,
 } from "@/lib/catalog";
 import {
   HAIRSTYLE_IMAGE_CONTENT_TYPES,
   MAX_HAIRSTYLE_IMAGE_BYTES,
+  UPLOAD_COMPLETION_GRACE_MS,
   HairstyleImageUploadError,
   assertUploadedHairstyleImageIdentity,
   issueHairstyleImageUploadIntent,
@@ -24,6 +26,7 @@ import {
   type BlobClientUploadGateway,
 } from "@/lib/media/vercel-blob-client";
 import { queueUnattachedHairstyleImageCleanup } from "@/lib/media/hairstyle-media-cleanup";
+import { queueAuthorizedHairstyleImageCleanup } from "@/lib/media/hairstyle-media-cleanup";
 
 import { loadAdminConfig, type AdminConfig } from "./admin-auth-api";
 import { publicJson } from "./public-responses";
@@ -46,6 +49,8 @@ export type AdminHairstyleMediaUploadApiDeps = {
   getHairstyle: (id: string) => Promise<AdminMediaDetail>;
   listMedia: typeof listHairstyleMedia;
   attachImage: typeof attachHairstyleImageIdempotently;
+  replaceImage: typeof replaceHairstyleImageIdempotently;
+  queueAuthorizedCleanup: typeof queueAuthorizedHairstyleImageCleanup;
   queueUnattachedCleanup: typeof queueUnattachedHairstyleImageCleanup;
   blob: BlobClientUploadGateway;
   log: (entry: { outcome: string; hairstyleId: string; pathname?: string }) => void;
@@ -57,6 +62,8 @@ const defaultDeps: AdminHairstyleMediaUploadApiDeps = {
   getHairstyle: getHairstyleDetailForAdmin,
   listMedia: listHairstyleMedia,
   attachImage: attachHairstyleImageIdempotently,
+  replaceImage: replaceHairstyleImageIdempotently,
+  queueAuthorizedCleanup: queueAuthorizedHairstyleImageCleanup,
   queueUnattachedCleanup: queueUnattachedHairstyleImageCleanup,
   blob: vercelBlobClientGateway,
   log: (entry) => console.error(JSON.stringify({ event: "admin-hairstyle-image-upload", ...entry })),
@@ -80,7 +87,7 @@ function parseGalleryVariantId(value: unknown): string | null | undefined {
   return undefined;
 }
 
-async function countGalleryImages(
+async function galleryImages(
   hairstyleId: string,
   hairstyleVariantId: string | null,
   deps: AdminHairstyleMediaUploadApiDeps,
@@ -90,7 +97,47 @@ async function countGalleryImages(
     throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The selected variant does not belong to this hairstyle.");
   }
   const media = await deps.listMedia(hairstyleId, hairstyleVariantId);
-  return media.filter((item) => item.type === "IMAGE").length;
+  return media.filter((item) => item.type === "IMAGE");
+}
+
+async function assertReplacementTargetCurrent(
+  intent: ReturnType<typeof verifyHairstyleImageUploadIntent>,
+  deps: AdminHairstyleMediaUploadApiDeps,
+) {
+  if (!intent.replacement) return;
+  const target = (await galleryImages(intent.hairstyleId, intent.hairstyleVariantId, deps))
+    .find((media) => media.id === intent.replacement!.mediaId);
+  if (
+    !target ||
+    target.storageKey !== intent.replacement.storageKey ||
+    target.updatedAt.toISOString() !== intent.replacement.updatedAt
+  ) {
+    throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "The photo changed after replacement began.");
+  }
+}
+
+async function attachVerifiedIntent(
+  intent: ReturnType<typeof verifyHairstyleImageUploadIntent>,
+  verified: { pathname: string; url: string },
+  deps: AdminHairstyleMediaUploadApiDeps,
+) {
+  if (intent.replacement) {
+    return deps.replaceImage({
+      hairstyleId: intent.hairstyleId,
+      hairstyleVariantId: intent.hairstyleVariantId,
+      storageKey: verified.pathname,
+      deliveryUrl: verified.url,
+      targetMediaId: intent.replacement.mediaId,
+      expectedTargetStorageKey: intent.replacement.storageKey,
+      expectedTargetUpdatedAt: new Date(intent.replacement.updatedAt),
+    });
+  }
+  return deps.attachImage({
+    hairstyleId: intent.hairstyleId,
+    hairstyleVariantId: intent.hairstyleVariantId,
+    storageKey: verified.pathname,
+    deliveryUrl: verified.url,
+  });
 }
 
 function parseUploadBody(input: Record<string, unknown>): HandleUploadBody | null {
@@ -146,25 +193,44 @@ export async function createHairstyleImageUploadIntentApi(
   if ("response" in authorized) return authorized.response;
   const input = await readJsonBody(request);
   const hairstyleVariantId = input && parseGalleryVariantId(input.hairstyleVariantId);
+  const replacementMediaId = input && input.replacementMediaId;
   if (
     !input ||
-    ![1, 2].includes(Object.keys(input).length) ||
-    !Object.keys(input).every((key) => key === "contentType" || key === "hairstyleVariantId") ||
+    ![1, 2, 3].includes(Object.keys(input).length) ||
+    !Object.keys(input).every((key) => key === "contentType" || key === "hairstyleVariantId" || key === "replacementMediaId") ||
     !isImageContentType(input.contentType) ||
-    hairstyleVariantId === undefined
+    hairstyleVariantId === undefined ||
+    (replacementMediaId !== undefined && !isVariantId(replacementMediaId))
   ) {
     return response(400, "INVALID_INPUT", "Choose a supported image type.");
   }
 
   try {
-    if (await countGalleryImages(hairstyleId, hairstyleVariantId, deps) >= MEDIA_LIMITS.IMAGE) {
+    const images = await galleryImages(hairstyleId, hairstyleVariantId, deps);
+    const replacementTarget = replacementMediaId === undefined
+      ? null
+      : images.find((media) => media.id === replacementMediaId);
+    if (replacementMediaId !== undefined && !replacementTarget) {
+      return response(404, "MEDIA_NOT_FOUND", "The photo being replaced was not found in this gallery.");
+    }
+    if (!replacementTarget && images.length >= MEDIA_LIMITS.IMAGE) {
       return response(409, "MEDIA_LIMIT_REACHED", "This gallery already has the maximum number of images.");
     }
     const intent = issueHairstyleImageUploadIntent(storage, {
       hairstyleId,
       hairstyleVariantId,
       contentType: input.contentType,
+      replacement: replacementTarget ? {
+        mediaId: replacementTarget.id,
+        storageKey: replacementTarget.storageKey,
+        updatedAt: replacementTarget.updatedAt.toISOString(),
+      } : null,
     });
+    await deps.queueAuthorizedCleanup(
+      hairstyleId,
+      intent.pathname,
+      new Date(intent.validUntil + UPLOAD_COMPLETION_GRACE_MS + 5 * 60_000),
+    );
     return publicJson(201, {
       pathname: intent.pathname,
       clientPayload: intent.clientPayload,
@@ -176,7 +242,10 @@ export async function createHairstyleImageUploadIntentApi(
     if (error instanceof HairstyleImageUploadError) {
       return response(400, error.code, error.message);
     }
-    return response(404, "HAIRSTYLE_NOT_FOUND", "The hairstyle was not found.");
+    if (isCatalogError(error, "HAIRSTYLE_NOT_FOUND")) {
+      return response(404, "HAIRSTYLE_NOT_FOUND", "The hairstyle was not found.");
+    }
+    return response(503, "MEDIA_STORAGE_UNAVAILABLE", "Image upload authorization is temporarily unavailable.");
   }
 }
 
@@ -236,12 +305,7 @@ export async function confirmHairstyleImageUploadApi(
       return response(502, "MEDIA_STORAGE_UNAVAILABLE", "The uploaded photo could not be found in storage. Retry the upload.");
     }
     try {
-      const { media } = await deps.attachImage({
-        hairstyleId: intent.hairstyleId,
-        hairstyleVariantId: intent.hairstyleVariantId,
-        storageKey: verified.pathname,
-        deliveryUrl: verified.url,
-      });
+      const { media } = await attachVerifiedIntent(intent, verified, deps);
       return publicJson(200, { media });
     } catch (error) {
       // The direct upload may have succeeded even when attachment loses a
@@ -303,7 +367,8 @@ export async function handleHairstyleImageUploadApi(
             throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "This image upload request is invalid.");
           }
           const intent = verifyHairstyleImageUploadIntent(clientPayload, storage, { hairstyleId, pathname });
-          if (await countGalleryImages(hairstyleId, intent.hairstyleVariantId, deps) >= MEDIA_LIMITS.IMAGE) {
+          await assertReplacementTargetCurrent(intent, deps);
+          if (!intent.replacement && (await galleryImages(hairstyleId, intent.hairstyleVariantId, deps)).length >= MEDIA_LIMITS.IMAGE) {
             throw new HairstyleImageUploadError("INVALID_UPLOAD_INTENT", "This gallery already has the maximum number of images.");
           }
           return {
@@ -321,12 +386,7 @@ export async function handleHairstyleImageUploadApi(
           const metadata = await deps.blob.head(blob.url, storage.token);
           const verified = validateUploadedHairstyleImage(metadata, storage, intent);
           try {
-            await deps.attachImage({
-              hairstyleId: intent.hairstyleId,
-              hairstyleVariantId: intent.hairstyleVariantId,
-              storageKey: verified.pathname,
-              deliveryUrl: verified.url,
-            });
+            await attachVerifiedIntent(intent, verified, deps);
           } catch (error) {
             // The callback may be retried by Vercel Blob. Preserve that path
             // for a grace period, then let the durable worker remove an object
@@ -354,7 +414,7 @@ export async function handleHairstyleImageUploadApi(
       return response(400, error.code, "The image upload could not be accepted.");
     }
     if (isCatalogError(error)) {
-      const status = error.code === "MEDIA_LIMIT_REACHED" || error.code === "STORAGE_KEY_ALREADY_EXISTS" ? 409 : 400;
+      const status = error.code === "MEDIA_LIMIT_REACHED" || error.code === "STORAGE_KEY_ALREADY_EXISTS" || error.code === "STORAGE_KEY_TOMBSTONED" || error.code === "STALE_MEDIA_REPLACEMENT" ? 409 : 400;
       return response(status, error.code, "The image upload could not be finalized.");
     }
     // A durable cleanup task was queued before this non-2xx response, so Blob

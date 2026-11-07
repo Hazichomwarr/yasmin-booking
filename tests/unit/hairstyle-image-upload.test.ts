@@ -33,7 +33,7 @@ describe("hairstyle image upload intent", () => {
     );
   });
 
-  it("binds a version 2 permission to its variant while retaining version 1 service permissions", () => {
+  it("binds current permissions to their gallery while retaining version 1 service permissions", () => {
     const variant = issueHairstyleImageUploadIntent(
       storage,
       { hairstyleId: "style_1", hairstyleVariantId: "variant_1", contentType: "image/jpeg" },
@@ -67,6 +67,42 @@ describe("hairstyle image upload intent", () => {
     assert.equal(
       verifyHairstyleImageUploadIntent(clientPayload, storage, { hairstyleId: "style_1" }, { now: 1_001 }).hairstyleVariantId,
       null,
+    );
+  });
+
+  it("signs the exact replacement identity and expected existing state", () => {
+    const intent = issueHairstyleImageUploadIntent(
+      storage,
+      {
+        hairstyleId: "style_1",
+        hairstyleVariantId: "variant_1",
+        contentType: "image/png",
+        replacement: {
+          mediaId: "media_1",
+          storageKey: "hairstyles/style_1/old.png",
+          updatedAt: "2026-11-07T12:00:00.000Z",
+        },
+      },
+      { now: 1_000, randomId: () => "replacement-object" },
+    );
+    const verified = verifyHairstyleImageUploadIntent(intent.clientPayload, storage, {
+      hairstyleId: "style_1",
+      hairstyleVariantId: "variant_1",
+      pathname: intent.pathname,
+    }, { now: 1_001 });
+
+    assert.deepEqual(verified.replacement, {
+      mediaId: "media_1",
+      storageKey: "hairstyles/style_1/old.png",
+      updatedAt: "2026-11-07T12:00:00.000Z",
+    });
+    assert.throws(
+      () => issueHairstyleImageUploadIntent(storage, {
+        hairstyleId: "style_1",
+        contentType: "image/png",
+        replacement: { mediaId: "", storageKey: "old.png", updatedAt: "not-a-date" },
+      }),
+      (error: unknown) => error instanceof HairstyleImageUploadError && error.code === "INVALID_UPLOAD_INTENT",
     );
   });
 
