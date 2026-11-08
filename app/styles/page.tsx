@@ -42,8 +42,8 @@ export default async function StylesPage() {
                 </div>
                 <div className={styles.grid}>
                   {category.hairstyles.map((hairstyle) => (
-                    <article key={hairstyle.id} className={styles.card}>
-                      <Link href={`/styles/${encodeURIComponent(hairstyle.slug)}`} className={styles.imageLink} aria-label={`View ${hairstyle.name}`}>
+                    <article key={hairstyle.id} className={`${styles.card} ${hairstyle.coverImage ? "" : styles.textOnlyCard}`}>
+                      {hairstyle.coverImage && <Link href={`/styles/${encodeURIComponent(hairstyle.slug)}`} className={styles.imageLink} aria-label={`View ${hairstyle.name}`}>
                         <PublicHairstyleCover
                           image={hairstyle.coverImage}
                           hairstyleName={hairstyle.name}
@@ -51,14 +51,14 @@ export default async function StylesPage() {
                           className={styles.image}
                           fallbackClassName={styles.fallback}
                         />
-                      </Link>
+                      </Link>}
                       <div className={styles.cardBody}>
                         <p className={styles.cardCategory}>{hairstyle.category.name}</p>
                         <div className={styles.cardTitleRow}>
                           <h3><Link href={`/styles/${encodeURIComponent(hairstyle.slug)}`}>{hairstyle.name}</Link></h3>
                           <p className={styles.price}>{hairstyle.startingPriceCents === null ? "Portfolio" : `${hairstyle.requiresVariant ? "From " : ""}${money(hairstyle.startingPriceCents)}`}</p>
                         </div>
-                        <p className={styles.preview}>{hairstyle.description || "Explore this signature Yasmin style and its available options."}</p>
+                        {hairstyle.description && <p className={styles.preview}>{hairstyle.description}</p>}
                         <Link href={`/styles/${encodeURIComponent(hairstyle.slug)}`} className={styles.details}>View style <span aria-hidden="true">→</span></Link>
                       </div>
                     </article>

@@ -258,6 +258,7 @@ export function BookingExperience({ hairstyles, initialSelection, consentWording
   const zone = zoneLabel(availability.location.timeZone);
   const errorFor = (field: PublicContactField) => problems[field] ? { "aria-invalid": true as const, "aria-describedby": `${field}-error` } : {};
   const title = ["Choose your style", "Choose your date & time", "Your details", "Review & pay"][step - 1];
+  const selectedCoverImage = coverFor(selectedStyle, selectedVariant);
   const summary = <BookingSummary location={availability.location} style={selectedStyle} variant={selectedVariant} date={date} slot={selectedSlot} quote={displayedQuote} zone={zone} />;
 
   return <main className={styles.page}>
@@ -304,15 +305,15 @@ export function BookingExperience({ hairstyles, initialSelection, consentWording
                   const hasInlineVariants = isSelected && style.requiresVariant;
 
                   return <div key={style.id} className={`${styles.styleChoice} ${hasInlineVariants ? styles.styleChoiceWithVariants : ""}`}>
-                    <button type="button" className={`${styles.styleCard} ${isSelected ? styles.selected : ""}`} aria-pressed={isSelected} aria-expanded={style.requiresVariant ? isSelected : undefined} aria-controls={hasInlineVariants ? `variant-options-${style.id}` : undefined} onClick={() => chooseStyle(style)}>
-                      <span className={styles.styleImage}><PublicHairstyleCover image={style.coverImage} hairstyleName={style.name} sizes="(max-width: 430px) 42vw, (max-width: 900px) 30vw, 230px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} /></span>
+                    <button type="button" className={`${styles.styleCard} ${style.coverImage ? "" : styles.styleCardTextOnly} ${isSelected ? styles.selected : ""}`} aria-pressed={isSelected} aria-expanded={style.requiresVariant ? isSelected : undefined} aria-controls={hasInlineVariants ? `variant-options-${style.id}` : undefined} onClick={() => chooseStyle(style)}>
+                      {style.coverImage && <span className={styles.styleImage}><PublicHairstyleCover image={style.coverImage} hairstyleName={style.name} sizes="(max-width: 430px) 42vw, (max-width: 900px) 30vw, 230px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} /></span>}
                       <span className={styles.styleCardBody}><span className={styles.styleCardHeader}><strong>{style.name}</strong><b>{style.requiresVariant ? "From " + money(Math.min(...style.variants.map((variant) => variant.priceCents))) : money(style.priceCents!)}</b></span>{style.description && <span className={styles.description}>{style.description}</span>}<span className={styles.selectLabel}>{isSelected ? "Selected" : style.requiresVariant ? "Choose options" : "Select service"}</span></span>
                     </button>
                     {hasInlineVariants && <fieldset ref={variantOptions} id={`variant-options-${style.id}`} className={styles.inlineVariants} tabIndex={-1}>
                       <legend>Choose your {style.name} option</legend>
                       <p className={styles.variantAnnouncement} role="status">{style.variants.length} options available for {style.name}.</p>
-                      <div className={styles.variantGrid}>{style.variants.map((variant) => <button key={variant.id} type="button" aria-pressed={variant.id === details.hairstyleVariantId} className={variant.id === details.hairstyleVariantId ? styles.selected : ""} onClick={() => chooseVariant(variant.id)}>
-                        <span className={styles.variantImage}><PublicHairstyleCover image={variant.coverImage} hairstyleName={variant.name} sizes="(max-width: 600px) 34vw, 160px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} /></span>
+                      <div className={styles.variantGrid}>{style.variants.map((variant) => <button key={variant.id} type="button" aria-pressed={variant.id === details.hairstyleVariantId} className={`${variant.coverImage ? "" : styles.variantTextOnly} ${variant.id === details.hairstyleVariantId ? styles.selected : ""}`} onClick={() => chooseVariant(variant.id)}>
+                        {variant.coverImage && <span className={styles.variantImage}><PublicHairstyleCover image={variant.coverImage} hairstyleName={variant.name} sizes="(max-width: 600px) 34vw, 160px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} /></span>}
                         <span className={styles.variantBody}><span><strong>{variant.name}</strong><b>{money(variant.priceCents)}</b></span>{variant.description && <small>{variant.description}</small>}<em>{variant.id === details.hairstyleVariantId ? "Selected" : "Select this look"}</em></span>
                       </button>)}</div>
                       {selectedVariant && <VariantGallery variant={selectedVariant} galleryImageIndex={galleryImageIndex} onSelectImage={setGalleryImageIndex} />}
@@ -343,8 +344,8 @@ export function BookingExperience({ hairstyles, initialSelection, consentWording
 
         {step === 4 && <form className={styles.stage} onSubmit={pay}>
           <div className={styles.sectionHeading}><div><p className={styles.kicker}>YOUR APPOINTMENT</p><h2>Review before you reserve</h2></div><p>Secure payment is handled by Stripe.</p></div>
-          <div className={styles.reviewCard}>
-            <div className={styles.reviewImage}><PublicHairstyleCover image={coverFor(selectedStyle, selectedVariant)} hairstyleName={selectedVariant?.name ?? selectedStyle?.name ?? "Selected hairstyle"} sizes="112px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} /></div>
+          <div className={`${styles.reviewCard} ${selectedCoverImage ? "" : styles.reviewCardTextOnly}`}>
+            {selectedCoverImage && <div className={styles.reviewImage}><PublicHairstyleCover image={selectedCoverImage} hairstyleName={selectedVariant?.name ?? selectedStyle?.name ?? "Selected hairstyle"} sizes="112px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} /></div>}
             <div><strong>{selectedStyle?.name}</strong>{selectedVariant && <span>{selectedVariant.name}</span>}<small>{dateLabel(date, "long")} · {selectedSlot ? timeLabel(selectedSlot.time) : ""} {zone}</small></div>
           </div>
           <dl className={styles.review}><dt>Salon</dt><dd>{availability.location.address ?? availability.location.name}</dd><dt>Guest</dt><dd>{details.name.trim()}</dd><dt>Service total</dt><dd>{displayedQuote && money(displayedQuote.totalPriceCents)}</dd><dt>Deposit due today</dt><dd className={styles.deposit}>{displayedQuote && money(displayedQuote.depositAmountCents)}</dd><dt>Due after your service</dt><dd>{displayedQuote && money(displayedQuote.balanceDueCents)}</dd></dl>
@@ -366,10 +367,12 @@ function BookingSummary({ location, style, variant, date, slot, quote, zone }: {
   quote: Quote | null;
   zone: string;
 }) {
+  const coverImage = coverFor(style, variant);
+
   return <div className={styles.summaryCard}>
     <p className={styles.summaryEyebrow}>BOOKING SUMMARY</p>
-    <div className={styles.summaryStyle}>
-      <div className={styles.summaryImage}><PublicHairstyleCover image={coverFor(style, variant)} hairstyleName={variant?.name ?? style?.name ?? "Your selected style"} sizes="112px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} /></div>
+    <div className={`${styles.summaryStyle} ${coverImage ? "" : styles.summaryStyleTextOnly}`}>
+      {coverImage && <div className={styles.summaryImage}><PublicHairstyleCover image={coverImage} hairstyleName={variant?.name ?? style?.name ?? "Your selected style"} sizes="112px" className={styles.hairstyleImage} fallbackClassName={styles.hairstyleFallback} /></div>}
       <div><strong>{style?.name ?? "Choose your style"}</strong><span>{variant?.name ?? (style?.requiresVariant ? "Choose an option" : "Service selection")}</span></div>
     </div>
     <dl className={styles.summaryList}>

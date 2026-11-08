@@ -262,6 +262,20 @@
   box-shadow: 0 8px 22px rgba(197, 47, 96, .13);
 }
 
+.styleCardTextOnly .styleCardBody {
+  padding: 18px;
+}
+
+.styleCardTextOnly .styleCardHeader strong {
+  font: 1.18rem/1.15 Georgia, serif;
+}
+
+.styleCardTextOnly .description {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
 .styleImage,
 .summaryImage,
 .reviewImage {
@@ -390,6 +404,10 @@
   overflow: hidden;
   border-radius: 12px;
   text-align: left;
+}
+
+.variantGrid button.variantTextOnly {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .variantImage {
@@ -759,6 +777,14 @@
   padding: 10px 16px 10px 0;
 }
 
+.reviewCardTextOnly {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.reviewCardTextOnly > div:last-child {
+  padding: 18px;
+}
+
 .reviewCard strong {
   font: 1.18rem/1.1 Georgia, serif;
 }
@@ -843,6 +869,16 @@
   display: grid;
   gap: 5px;
   padding-right: 18px;
+}
+
+.summaryStyleTextOnly {
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 18px 22px;
+}
+
+.summaryStyleTextOnly > div:last-child {
+  padding-right: 0;
 }
 
 .summaryStyle strong {
@@ -1044,6 +1080,10 @@
   .styleCard {
     display: grid;
     grid-template-columns: 105px minmax(0, 1fr);
+  }
+
+  .styleCardTextOnly {
+    display: block;
   }
 
   .styleImage {
