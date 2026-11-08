@@ -10,7 +10,7 @@ describe("Stripe webhook adapter", () => {
     const payload = JSON.stringify({ id: "evt_signed_test", type: "checkout.session.completed", data: { object: { id: "cs_signed_test" } } });
     const secret = "whsec_test_signing_secret";
     const signature = Stripe.webhooks.generateTestHeaderString({ payload, secret });
-    const gateway = stripeWebhookGateway("sk_test_unused");
+    const gateway = stripeWebhookGateway("sk_test_Unused123");
 
     assert.equal(gateway.constructEvent(payload, signature, secret).id, "evt_signed_test");
     assert.throws(() => gateway.constructEvent(`${payload} `, signature, secret));

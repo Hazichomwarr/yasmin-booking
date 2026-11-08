@@ -48,6 +48,19 @@ describe("configuration", () => {
     assert.deepEqual([...config.config.allowedOrigins], ["https://book.yasmin.example"]);
   });
 
+  it("accepts standard and restricted test/live server keys under the existing deployment policy", () => {
+    for (const [name, key] of [["standard live", "sk_live_StandardLive123"], ["restricted live", "rk_live_RestrictedLive123"]]) {
+      assert.ok(loadPublicBookingConfig({ ...PROD, STRIPE_SECRET_KEY: key }).ok, name);
+      const preview = loadPublicBookingConfig({ ...PROD, VERCEL_ENV: "preview", STRIPE_SECRET_KEY: key });
+      assert.ok(!preview.ok);
+      assert.deepEqual(preview.codes, ["LIVE_STRIPE_KEY_OUTSIDE_PRODUCTION"]);
+    }
+    for (const [name, key] of [["standard test", "sk_test_StandardTest123"], ["restricted test", "rk_test_RestrictedTest123"]]) {
+      assert.ok(loadPublicBookingConfig({ ...PROD, VERCEL_ENV: "preview", STRIPE_SECRET_KEY: key }).ok, name);
+      assert.ok(loadPublicBookingConfig({ ...PROD, STRIPE_SECRET_KEY: key }).ok, name);
+    }
+  });
+
   it("rejects unsafe production values", () => {
     const cases: [string, Env][] = [
       ["http origin", { ...PROD, APP_BASE_URL: "http://book.yasmin.example" }],
@@ -123,7 +136,7 @@ describe("configuration diagnostics", () => {
       ["INSECURE_APP_BASE_URL", { ...PROD, APP_BASE_URL: "http://book.yasmin.example" }],
       ["INVALID_RATE_LIMIT_SECRET", { ...PROD, RATE_LIMIT_SECRET: "short" }],
       ["INVALID_TRUSTED_CLIENT_IP_SOURCE", { ...PROD, TRUSTED_CLIENT_IP_SOURCE: "none" }],
-      ["INVALID_STRIPE_SECRET_KEY", { ...PROD, STRIPE_SECRET_KEY: "rk_live_restricted" }],
+      ["INVALID_STRIPE_SECRET_KEY", { ...PROD, STRIPE_SECRET_KEY: "pk_live_publishable" }],
       ["INVALID_STRIPE_SECRET_KEY", { ...PROD, STRIPE_SECRET_KEY: " sk_live_padded" }],
       ["LIVE_STRIPE_KEY_OUTSIDE_PRODUCTION", { ...PROD, VERCEL_ENV: "preview" }],
       ["ADDITIONAL_ORIGINS_ON_PRODUCTION", { ...PROD, PUBLIC_BOOKING_ADDITIONAL_ORIGINS: "https://preview.vercel.app" }],
@@ -161,13 +174,32 @@ describe("configuration diagnostics", () => {
       status: 503,
       code: "SERVICE_UNAVAILABLE",
       detail: "configuration-invalid",
-      configProblems: ["INVALID_RATE_LIMIT_SECRET", "INVALID_STRIPE_SECRET_KEY"],
+      configProblems: ["INVALID_RATE_LIMIT_SECRET"],
       requestId: undefined,
     }]);
     const logged = JSON.stringify(logs);
     for (const leak of [secretKey, rateSecret, "rk_", "sk_", "SUPERSECRET", rateSecret.slice(0, 4)]) {
       assert.ok(!logged.includes(leak), `logged ${leak}`);
     }
+  });
+
+  it("allows availability to proceed with a valid restricted production key", async () => {
+    const logs: PublicApiLogEntry[] = [];
+    const mustNotRun = () => { throw new Error("unrelated dependency must not run"); };
+    const deps: PublicBookingApiDeps = {
+      env: () => ({ ...PROD, PUBLIC_BOOKING_ENABLED: "true", STRIPE_SECRET_KEY: "rk_live_RestrictedLive123" }),
+      createBooking: mustNotRun,
+      startCheckout: mustNotRun,
+      getStatus: mustNotRun,
+      getAvailability: (() => Promise.resolve({})) as PublicBookingApiDeps["getAvailability"],
+      releaseBooking: mustNotRun,
+      consumeRateLimits: async () => ({ allowed: true }),
+      log: (entry) => logs.push(entry),
+    };
+    const response = await createPublicBookingApi(deps).getAvailability(new Request("https://book.yasmin.example/api/bookings/availability"));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { availability: {} });
+    assert.deepEqual(logs, []);
   });
 });
 

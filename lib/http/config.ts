@@ -7,8 +7,10 @@
  * - APP_BASE_URL over https;
  * - TRUSTED_CLIENT_IP_SOURCE=vercel on Vercel (VERCEL=1);
  * - no additional trusted origins on the production deployment;
- * - a Stripe test key on anything but VERCEL_ENV=production.
+ * - a Stripe test-mode server key on anything but VERCEL_ENV=production.
  */
+
+import { parseStripeServerKey } from "@/lib/stripe/server-key";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -128,8 +130,9 @@ export function loadPublicBookingConfig(env: Env): ConfigResult {
 
   const stripeKey = env.STRIPE_SECRET_KEY ?? "";
   if (strict) {
-    if (!/^sk_(test|live)_\S+$/.test(stripeKey)) add("INVALID_STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY must be a Stripe secret key.");
-    else if (stripeKey.startsWith("sk_live_") && !vercelProduction) add("LIVE_STRIPE_KEY_OUTSIDE_PRODUCTION", "A live Stripe key is only allowed on the production deployment.");
+    const parsedStripeKey = parseStripeServerKey(stripeKey);
+    if (!parsedStripeKey) add("INVALID_STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY must be a Stripe server key.");
+    else if (parsedStripeKey.mode === "live" && !vercelProduction) add("LIVE_STRIPE_KEY_OUTSIDE_PRODUCTION", "A live Stripe key is only allowed on the production deployment.");
   }
 
   const rateLimits = rateLimitsFrom(env.PUBLIC_BOOKING_RATE_LIMITS, add);

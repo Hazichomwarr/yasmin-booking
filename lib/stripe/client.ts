@@ -1,5 +1,7 @@
 import Stripe from "stripe";
 
+import { parseStripeServerKey } from "./server-key";
+
 /**
  * The one place a Stripe API client is constructed.
  *
@@ -9,10 +11,12 @@ import Stripe from "stripe";
  * the key is a test key, and the URL is plain http on localhost/127.0.0.1.
  */
 export function stripeClient(secretKey: string, env: Readonly<Record<string, string | undefined>> = process.env): Stripe {
+  const keyIdentity = parseStripeServerKey(secretKey);
+  if (!keyIdentity) throw new Error("Stripe API client requires a valid server key.");
   const local = env.STRIPE_LOCAL_TEST_API_URL;
   if (!local) return new Stripe(secretKey);
   if (env.NODE_ENV === "production") throw new Error("STRIPE_LOCAL_TEST_API_URL is not allowed in production.");
-  if (!secretKey.startsWith("sk_test_")) throw new Error("STRIPE_LOCAL_TEST_API_URL requires a Stripe test key.");
+  if (keyIdentity.mode !== "test") throw new Error("STRIPE_LOCAL_TEST_API_URL requires a Stripe test key.");
   let url: URL;
   try {
     url = new URL(local);
