@@ -113,6 +113,7 @@ export function BookingExperience({ hairstyles, initialSelection, consentWording
 
   const selectedStyle = useMemo(() => hairstyles.find((style) => style.id === details.hairstyleId) ?? null, [details.hairstyleId, hairstyles]);
   const selectedVariant = selectedStyle?.variants.find((variant) => variant.id === details.hairstyleVariantId) ?? null;
+  const canContinueToTime = selectedStyle !== null && !requiresVariantSelection(selectedStyle.requiresVariant, details.hairstyleVariantId);
   const selectedDate = useMemo(() => availability?.dates.find((item) => item.date === date), [availability, date]);
   const selectedSlot = selectedDate?.slots.find((slot) => slot.id === slotId && slot.available);
   const displayedQuote = createdQuote ?? (selectedStyle ? quoteFor(selectedStyle, selectedVariant) : null);
@@ -285,6 +286,8 @@ export function BookingExperience({ hairstyles, initialSelection, consentWording
           {summary}
         </details>
 
+        {step === 1 && <button type="button" className={`${styles.primary} ${styles.mobileContinue}`} disabled={!canContinueToTime} onClick={continueToTime}>Continue to date & time <span aria-hidden="true">→</span></button>}
+
         {step === 1 && <section className={styles.stage} aria-label="Choose your style">
           <p className={styles.stageLead}>Select a service to see your appointment total. We’ll confirm the final quote before you pay.</p>
           {hairstyles.length === 0
@@ -319,7 +322,7 @@ export function BookingExperience({ hairstyles, initialSelection, consentWording
               </div>
             </section>}
             </>}
-          <button type="button" className={styles.primary} disabled={!selectedStyle || requiresVariantSelection(selectedStyle.requiresVariant, details.hairstyleVariantId)} onClick={continueToTime}>Continue to date & time <span aria-hidden="true">→</span></button>
+          <button type="button" className={styles.primary} disabled={!canContinueToTime} onClick={continueToTime}>Continue to date & time <span aria-hidden="true">→</span></button>
         </section>}
 
         {step === 2 && <section className={styles.stage} aria-label="Choose date and time">

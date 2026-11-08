@@ -896,6 +896,10 @@
   display: none;
 }
 
+.mobileContinue {
+  display: none;
+}
+
 .emptyState {
   padding: 22px;
   border: 1px dashed #dfc7c2;
@@ -1016,6 +1020,11 @@
     width: 24px;
     height: 24px;
     margin-bottom: 5px;
+  }
+
+  .mobileContinue {
+    margin: -9px 0 25px;
+    display: block;
   }
 
   .styleGrid,
