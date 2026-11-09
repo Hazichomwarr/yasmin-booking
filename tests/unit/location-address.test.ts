@@ -5,6 +5,7 @@ import { formatSalonAddress } from "@/lib/booking/location-address";
 import {
   ConfirmationEmailConfigurationError,
   confirmationMessage,
+  salonNotificationCcRecipient,
   salonNotificationRecipient,
 } from "@/lib/email/confirmation";
 
@@ -53,6 +54,34 @@ describe("salon address", () => {
     }
   });
 
+  it("normalizes an optional salon notification CC without duplicating the owner recipient", () => {
+    assert.equal(
+      salonNotificationCcRecipient({
+        SALON_NOTIFICATION_EMAIL: "owner@yasmin.example",
+        SALON_NOTIFICATION_CC_EMAIL: "  ASSISTANT@YASMIN.EXAMPLE  ",
+      }),
+      "assistant@yasmin.example",
+    );
+    assert.equal(salonNotificationCcRecipient({ SALON_NOTIFICATION_EMAIL: "owner@yasmin.example" }), null);
+    assert.equal(salonNotificationCcRecipient({
+      SALON_NOTIFICATION_EMAIL: "owner@yasmin.example",
+      SALON_NOTIFICATION_CC_EMAIL: "   ",
+    }), null);
+    assert.equal(salonNotificationCcRecipient({
+      SALON_NOTIFICATION_EMAIL: "owner@yasmin.example",
+      SALON_NOTIFICATION_CC_EMAIL: " OWNER@YASMIN.EXAMPLE ",
+    }), null);
+    assert.throws(
+      () => salonNotificationCcRecipient({
+        SALON_NOTIFICATION_EMAIL: "owner@yasmin.example",
+        SALON_NOTIFICATION_CC_EMAIL: "not-an-email",
+      }),
+      (error: unknown) => error instanceof ConfirmationEmailConfigurationError
+        && error.code === "owner-cc-recipient-invalid"
+        && !error.message.includes("not-an-email"),
+    );
+  });
+
   it("uses booking-time variant and money snapshots in the owner notification", () => {
     const message = confirmationMessage({
       appointmentId: "cmtestbookingref",
@@ -70,13 +99,42 @@ describe("salon address", () => {
         customer: { name: "Customer", email: "customer@example.test", phone: "+1 555 010 0100" },
         location: { ...WILLIAM_STREET, phone: null },
       },
-    }, { SALON_NOTIFICATION_EMAIL: "yasmin@example.test" });
+    }, {
+      SALON_NOTIFICATION_EMAIL: "yasmin@example.test",
+      SALON_NOTIFICATION_CC_EMAIL: "assistant@example.test",
+    });
     assert.equal(message.to, "yasmin@example.test");
+    assert.equal(message.cc, "assistant@example.test");
     assert.match(message.text, /^Booking reference: YB-OKINGREF$/m);
     assert.match(message.text, /^William Street · 2026-10-20 at 11:00 ET$/m);
     assert.match(message.text, /^Style: Bob — Sleek Braided$/m);
     assert.match(message.text, /^Total: \$240\.00$/m);
     assert.match(message.text, /^Deposit paid: \$40\.00$/m);
     assert.match(message.text, /^Balance due at salon: \$200\.00$/m);
+  });
+
+  it("never adds the salon CC to customer confirmations", () => {
+    const message = confirmationMessage({
+      appointmentId: "cmtestbookingref",
+      recipientEmail: "customer@example.test",
+      kind: "CUSTOMER_CONFIRMATION",
+      appointment: {
+        locationNameSnapshot: "William Street",
+        appointmentDate: new Date("2026-10-20T00:00:00.000Z"),
+        slotTimeSnapshot: "11:00",
+        hairstyleNameSnapshot: "Bob",
+        hairstyleVariantNameSnapshot: null,
+        totalPriceCents: 20_000,
+        depositAmountCents: 4_000,
+        balanceDueCents: 16_000,
+        customer: { name: "Customer", email: "customer@example.test", phone: "+1 555 010 0100" },
+        location: { ...WILLIAM_STREET, phone: null },
+      },
+    }, {
+      SALON_NOTIFICATION_EMAIL: "yasmin@example.test",
+      SALON_NOTIFICATION_CC_EMAIL: "assistant@example.test",
+    });
+    assert.equal(message.to, "customer@example.test");
+    assert.equal(message.cc, undefined);
   });
 });

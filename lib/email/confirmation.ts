@@ -36,7 +36,7 @@ export const MAX_ATTEMPTS = 5;
 export const SENDING_LEASE_MS = 10 * 60_000;
 export const PROVIDER_TIMEOUT_MS = 10_000;
 
-export type ConfirmationMessage = { to: string; subject: string; text: string };
+export type ConfirmationMessage = { to: string; cc?: string; subject: string; text: string };
 type Env = Readonly<Record<string, string | undefined>>;
 
 export type ConfirmationEmailAdapter = {
@@ -53,8 +53,12 @@ export class ConfirmationEmailDeliveryError extends Error {
 
 /** A server configuration problem, never a customer-address or provider error. */
 export class ConfirmationEmailConfigurationError extends Error {
-  constructor(readonly code: "owner-recipient-not-configured" | "customer-recipient-not-configured") {
-    super(code === "owner-recipient-not-configured" ? "Salon notification recipient is not configured." : "Customer notification recipient is not configured.");
+  constructor(readonly code: "owner-recipient-not-configured" | "owner-cc-recipient-invalid" | "customer-recipient-not-configured") {
+    super(code === "owner-recipient-not-configured"
+      ? "Salon notification recipient is not configured."
+      : code === "owner-cc-recipient-invalid"
+        ? "Salon notification CC recipient is invalid."
+        : "Customer notification recipient is not configured.");
     this.name = "ConfirmationEmailConfigurationError";
   }
 }
@@ -71,7 +75,13 @@ export function resendConfirmationEmailAdapter(): ConfirmationEmailAdapter {
         response = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-          body: JSON.stringify({ from, to: [message.to], subject: message.subject, text: message.text }),
+          body: JSON.stringify({
+            from,
+            to: [message.to],
+            ...(message.cc ? { cc: [message.cc] } : {}),
+            subject: message.subject,
+            text: message.text,
+          }),
           signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
         });
       } catch {
@@ -132,6 +142,16 @@ export function salonNotificationRecipient(env: Env = process.env): string {
   return email;
 }
 
+/** Optional server-only CC. A duplicate of the primary recipient is omitted. */
+export function salonNotificationCcRecipient(env: Env = process.env, ownerRecipient = salonNotificationRecipient(env)): string | null {
+  const configured = env.SALON_NOTIFICATION_CC_EMAIL?.trim().toLowerCase() ?? "";
+  if (!configured) return null;
+  if (configured.length > 254 || !PUBLIC_EMAIL_PATTERN.test(configured)) {
+    throw new ConfirmationEmailConfigurationError("owner-cc-recipient-invalid");
+  }
+  return configured === ownerRecipient ? null : configured;
+}
+
 /** Stable non-secret reference for staff and customer correspondence. */
 export function bookingReference(appointmentId: string): string {
   return `YB-${appointmentId.slice(-8).toUpperCase()}`;
@@ -146,8 +166,11 @@ export function confirmationMessage(row: NotificationRow, env: Env = process.env
   const schedule = `${appointment.locationNameSnapshot} · ${appointment.appointmentDate.toISOString().slice(0, 10)} at ${appointment.slotTimeSnapshot} ET`;
 
   if (row.kind === "OWNER_NEW_BOOKING") {
+    const to = salonNotificationRecipient(env);
+    const cc = salonNotificationCcRecipient(env, to);
     return {
-      to: salonNotificationRecipient(env),
+      to,
+      ...(cc ? { cc } : {}),
       subject: `New booking confirmed · ${reference}`,
       text: [
         "New confirmed appointment.",

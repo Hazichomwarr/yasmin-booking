@@ -16,7 +16,10 @@ import {
 } from "../support/confirmation-fixtures";
 import { integrationSkip, useCleanTestDatabase } from "../support/integration-database";
 
-const ownerEnv = () => ({ SALON_NOTIFICATION_EMAIL: "yasmin@example.test" });
+const ownerEnv = () => ({
+  SALON_NOTIFICATION_EMAIL: "yasmin@example.test",
+  SALON_NOTIFICATION_CC_EMAIL: "assistant@example.test",
+});
 
 describe("customer and owner booking notifications (YASMIN-4B.2)", { skip: integrationSkip }, () => {
   useCleanTestDatabase();
@@ -43,6 +46,8 @@ describe("customer and owner booking notifications (YASMIN-4B.2)", { skip: integ
     const owner = sent.calls.find((call) => call.message.to === "yasmin@example.test");
     assert.ok(customer);
     assert.ok(owner);
+    assert.equal(owner.message.cc, "assistant@example.test");
+    assert.equal(customer.message.cc, undefined);
     assert.match(customer.message.text, /524 William St, East Orange, NJ 07017/);
     assert.match(customer.message.text, /Deposit paid: \$40\.00 \(nonrefundable\)/);
     assert.match(customer.message.text, /Balance due after service: \$160\.00/);
@@ -89,6 +94,27 @@ describe("customer and owner booking notifications (YASMIN-4B.2)", { skip: integ
     assert.equal(sent.calls[0].message.to, booking.email);
     const owner = await outbox(booking.appointmentId, "OWNER_NEW_BOOKING");
     assert.deepEqual([owner.state, owner.attemptCount, owner.lastError], ["FAILED", 1, "owner-recipient-not-configured"]);
+  });
+
+  it("records an invalid owner CC visibly without sending or losing the durable owner job", async () => {
+    const booking = await confirmedBooking({ keepOwner: true });
+    const sent = provider();
+    assert.deepEqual(await deliverPendingConfirmationEmails(sent, {
+      env: () => ({
+        SALON_NOTIFICATION_EMAIL: "yasmin@example.test",
+        SALON_NOTIFICATION_CC_EMAIL: "not-an-email",
+      }),
+    }), { sent: 1, failed: 1, exhausted: 0 });
+    assert.equal(sent.calls.length, 1);
+    assert.equal(sent.calls[0].message.to, booking.email);
+    assert.equal(sent.calls[0].message.cc, undefined);
+    const owner = await outbox(booking.appointmentId, "OWNER_NEW_BOOKING");
+    assert.deepEqual([owner.state, owner.attemptCount, owner.lastError], ["FAILED", 1, "owner-cc-recipient-invalid"]);
+
+    const recovered = provider();
+    assert.deepEqual(await deliverPendingConfirmationEmails(recovered, { env: ownerEnv }), { sent: 1, failed: 0, exhausted: 0 });
+    assert.equal(recovered.calls[0].message.to, "yasmin@example.test");
+    assert.equal(recovered.calls[0].message.cc, "assistant@example.test");
   });
 
   it("retries the owner independently after its provider failure without resending the customer", async () => {
