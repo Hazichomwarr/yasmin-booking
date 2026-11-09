@@ -22,9 +22,9 @@ export const TODAY_AT_SALON_BOOKING_CTA = {
 export const TODAY_AT_SALON_CONTENT: Readonly<TodayAtSalonContent> = {
   title: "Inside Yasmin's Beauty Salon",
   description: "A glimpse of the beauty, creativity, and care behind every appointment.",
-  videoSrc: "/media/yasmin-salon-week-01.mp4",
+  videoSrc: "/media/yasmin-salon-week-02.mp4",
   videoAvailable: true,
-  posterSrc: "/media/yasmin-salon-week-01.jpg",
+  posterSrc: "/media/yasmin-salon-week-02.jpg",
   ctaLabel: "Explore Our Services",
   ctaHref: "/styles",
   publicationLabel: "Today at the salon",

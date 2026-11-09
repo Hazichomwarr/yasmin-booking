@@ -1,11 +1,14 @@
 # Today at the Salon media
 
-The first owner-supplied, mobile-optimized salon video is:
+The current owner-supplied salon video is:
 
-`yasmin-salon-week-01.mp4`
+`yasmin-salon-week-02.mp4`
 
-It is a 15-second, 360×640 H.264 MP4 with the source audio retained for optional
-visitor playback. `yasmin-salon-week-01.jpg` is its matching poster frame.
+It is a 6.8-second, 1024×576 MP4 with the audio track removed.
+`yasmin-salon-week-02.jpg` is its matching poster frame.
+
+The earlier `yasmin-salon-week-01` derivatives remain available as the prior
+weekly feature.
 
 Weekly rotation requires adding a new optimized, versioned MP4 and poster,
 updating their paths in `today-at-salon-content.ts`, and deploying. Keep
