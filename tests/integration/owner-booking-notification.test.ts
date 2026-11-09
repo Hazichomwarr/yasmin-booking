@@ -66,6 +66,21 @@ describe("customer and owner booking notifications (YASMIN-4B.2)", { skip: integ
     assert.equal(await prisma.bookingConfirmationEmail.count({ where: { appointmentId: booking.appointmentId, kind: "OWNER_NEW_BOOKING" } }), 1);
   });
 
+  it("creates only the owner notification when the customer has no email", async () => {
+    const booking = await pendingPublicBooking({ email: null });
+    assert.equal((await deliverWebhook(booking)).kind, "processed");
+    const jobs = await prisma.bookingConfirmationEmail.findMany({ where: { appointmentId: booking.appointmentId } });
+    assert.deepEqual(jobs.map((job) => job.kind), ["OWNER_NEW_BOOKING"]);
+
+    const sent = provider();
+    assert.deepEqual(await deliverPendingConfirmationEmails(sent, { env: ownerEnv }), { sent: 1, failed: 0, exhausted: 0 });
+    assert.equal(sent.calls[0].message.to, "yasmin@example.test");
+    assert.match(sent.calls[0].message.text, /Email: Not provided/);
+
+    assert.equal((await deliverWebhook(booking, "evt_owner_no_email_replay")).kind, "processed");
+    assert.equal(await prisma.bookingConfirmationEmail.count({ where: { appointmentId: booking.appointmentId } }), 1);
+  });
+
   it("records a missing owner recipient visibly while still delivering the customer confirmation", async () => {
     const booking = await confirmedBooking({ keepOwner: true });
     const sent = provider();

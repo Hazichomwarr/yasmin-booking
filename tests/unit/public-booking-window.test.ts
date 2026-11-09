@@ -121,6 +121,29 @@ describe("shared public contact rules", () => {
     assert.equal(parsePublicBookingInput({ ...base, phone: " (555) 010-0100 " }).phone, "(555) 010-0100");
     assert.equal(PUBLIC_PHONE_PATTERN.test("(555) 010-0100"), true);
   });
+
+  it("treats omitted, null, blank, and whitespace-only email as absent", () => {
+    assert.equal(publicContactProblems({ name: "Amina", email: "   ", phone: "(555) 010-0100", preferredStylistName: "" }).email, undefined);
+    for (const email of [undefined, null, "", "   "]) {
+      assert.equal(parsePublicBookingInput({ ...base, phone: "(555) 010-0100", email }).email, null);
+    }
+  });
+
+  it("normalizes a supplied email and validates only non-empty values", () => {
+    assert.equal(parsePublicBookingInput({ ...base, phone: "(555) 010-0100", email: "  AMINA@Example.Test  " }).email, "amina@example.test");
+    for (const email of ["not-an-email", "a@", "@example.test", `a@${"x".repeat(252)}.test`]) {
+      assert.ok(publicContactProblems({ name: "Amina", email, phone: "(555) 010-0100", preferredStylistName: "" }).email, email);
+      assert.throws(() => parsePublicBookingInput({ ...base, phone: "(555) 010-0100", email }), PublicBookingValidationError, email);
+    }
+  });
+
+  it("requires an address for email marketing consent but keeps SMS independent", () => {
+    assert.throws(() => parsePublicBookingInput({ ...base, phone: "(555) 010-0100", email: null, emailMarketingConsent: true }), PublicBookingValidationError);
+    const smsOnly = parsePublicBookingInput({ ...base, phone: "(555) 010-0100", email: null, smsMarketingConsent: true });
+    assert.equal(smsOnly.email, null);
+    assert.equal(smsOnly.emailMarketingConsent, false);
+    assert.equal(smsOnly.smsMarketingConsent, true);
+  });
 });
 
 const base = { name: "Amina", email: "a@example.test", phone: "", locationId: "loc", bookingSlotId: "slot", appointmentDate: "2027-03-02", hairstyleId: "style" };

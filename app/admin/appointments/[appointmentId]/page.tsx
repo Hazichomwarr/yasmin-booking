@@ -39,7 +39,7 @@ export default async function AdminAppointmentDetailPage({ params }: PageProps<"
         <h2>Customer</h2>
         <dl className={styles.details}>
           <dt>Name</dt><dd>{detail.customer.name}</dd>
-          <dt>Email</dt><dd><a href={`mailto:${detail.customer.email}`}>{detail.customer.email}</a></dd>
+          <dt>Email</dt><dd>{detail.customer.email ? <a href={`mailto:${detail.customer.email}`}>{detail.customer.email}</a> : "Not provided"}</dd>
           <dt>Phone</dt><dd><a href={`tel:${detail.customer.phone.replace(/[^\d+]/g, "")}`}>{detail.customer.phone}</a></dd>
         </dl>
       </section>

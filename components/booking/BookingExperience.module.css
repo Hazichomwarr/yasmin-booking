@@ -719,6 +719,13 @@
   font-weight: 500;
 }
 
+.fieldHelp {
+  color: #77676b;
+  font-size: .78rem;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
 .marketing {
   padding: 18px;
   border: 1px solid #efdfda;

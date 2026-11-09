@@ -383,7 +383,7 @@ async function fulfill(
     // from SALON_NOTIFICATION_EMAIL, never copied into appointment data.
     await tx.bookingConfirmationEmail.createMany({
       data: [
-        { appointmentId: appointment.id, kind: "CUSTOMER_CONFIRMATION", recipientEmail: customer.email },
+        ...(customer.email ? [{ appointmentId: appointment.id, kind: "CUSTOMER_CONFIRMATION" as const, recipientEmail: customer.email }] : []),
         { appointmentId: appointment.id, kind: "OWNER_NEW_BOOKING" },
       ],
       skipDuplicates: true,

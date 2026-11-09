@@ -137,7 +137,7 @@ describe("authorized booking status", { skip: integrationSkip }, () => {
       appointment.id,
       appointment.customerId,
       appointment.customer.name,
-      appointment.customer.email,
+      appointment.customer.email!,
       appointment.customer.phone,
       appointment.customerNotes!,
       appointment.preferredStylistName!,

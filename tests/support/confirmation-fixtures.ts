@@ -43,7 +43,7 @@ export function gateway(payment: { id: string; appointmentId: string; amountCent
 
 let sequence = 0;
 /** A public booking with an open Checkout Session: the state just before Stripe's webhook. */
-export async function pendingPublicBooking(options: { consent?: boolean } = {}) {
+export async function pendingPublicBooking(options: { consent?: boolean; email?: string | null } = {}) {
   sequence += 1;
   const { location, slot } = await publicBookingPlace();
   const category = await prisma.hairstyleCategory.create({
@@ -57,15 +57,16 @@ export async function pendingPublicBooking(options: { consent?: boolean } = {}) 
       priceCents: 20_000,
     },
   });
+  const email = options.email === undefined ? `outbox${sequence}@example.test` : options.email;
   const created = await createPublicBooking({
-    name: `Outbox Customer ${sequence}`, email: `outbox${sequence}@example.test`, phone: `+1 555 050 ${String(sequence).padStart(4, "0")}`,
+    name: `Outbox Customer ${sequence}`, email, phone: `+1 555 050 ${String(sequence).padStart(4, "0")}`,
     locationId: location.id, bookingSlotId: slot.id, appointmentDate: upcomingPublicBookingDate(),
     hairstyleId: hairstyle.id,
     emailMarketingConsent: options.consent ?? false, smsMarketingConsent: options.consent ?? false,
   });
   assert.equal((await startAuthorizedBookingCheckout(created.accessToken, { adapter: checkoutAdapter })).kind, "ready");
   const payment = await prisma.payment.findFirstOrThrow({ where: { appointmentId: created.booking.appointmentId } });
-  return { token: created.accessToken, appointmentId: created.booking.appointmentId, payment, email: `outbox${sequence}@example.test` };
+  return { token: created.accessToken, appointmentId: created.booking.appointmentId, payment, email };
 }
 
 export const deliverWebhook = (booking: Awaited<ReturnType<typeof pendingPublicBooking>>, eventId = `evt_outbox_${booking.payment.id}`, paymentStatus: "paid" | "unpaid" = "paid", status: "complete" | "expired" = "complete") =>
@@ -76,7 +77,7 @@ export const deliverWebhook = (booking: Awaited<ReturnType<typeof pendingPublicB
  * test explicitly requests both recipients. Dedicated owner tests use
  * keepOwner so old customer delivery scenarios remain focused on one lease.
  */
-export async function confirmedBooking(options: { consent?: boolean; keepOwner?: boolean } = {}) {
+export async function confirmedBooking(options: { consent?: boolean; keepOwner?: boolean; email?: string | null } = {}) {
   const booking = await pendingPublicBooking(options);
   assert.equal((await deliverWebhook(booking)).kind, "processed");
   if (!options.keepOwner) {

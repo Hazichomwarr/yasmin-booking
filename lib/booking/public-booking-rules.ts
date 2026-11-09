@@ -31,8 +31,7 @@ export function publicContactProblems(values: Record<PublicContactField, string>
   const phone = values.phone.trim();
   if (!name) problems.name = "Enter your full name.";
   else if (name.length > PUBLIC_BOOKING_LIMITS.name) problems.name = `Use at most ${PUBLIC_BOOKING_LIMITS.name} characters.`;
-  if (!email) problems.email = "Enter your email address.";
-  else if (email.length > PUBLIC_BOOKING_LIMITS.email || !PUBLIC_EMAIL_PATTERN.test(email)) problems.email = "Enter a valid email address, like name@example.com.";
+  if (email && (email.length > PUBLIC_BOOKING_LIMITS.email || !PUBLIC_EMAIL_PATTERN.test(email))) problems.email = "Enter a valid email address, like name@example.com.";
   if (!phone) problems.phone = "Enter your phone number.";
   else if (phone.length > PUBLIC_BOOKING_LIMITS.phone || !PUBLIC_PHONE_PATTERN.test(phone)) problems.phone = "Enter a valid phone number, like (555) 010-0100.";
   if (values.preferredStylistName.trim().length > PUBLIC_BOOKING_LIMITS.preferredStylistName) {

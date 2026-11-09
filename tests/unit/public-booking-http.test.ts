@@ -391,6 +391,52 @@ describe("rate-limit keys", () => {
   });
 });
 
+describe("optional-email booking rate limits", () => {
+  const result = {
+    booking: {
+      appointmentId: "appointment-id",
+      locationName: "William Street",
+      appointmentDate: "2027-03-02",
+      slotTime: "11:00",
+      holdExpiresAt: new Date("2027-03-01T16:15:00.000Z"),
+      totalPriceCents: 20_000,
+      depositAmountCents: 4_000,
+      balanceDueCents: 16_000,
+    },
+    accessToken: "A".repeat(43),
+    accessExpiresAt: new Date("2027-03-02T16:00:00.000Z"),
+  };
+  const request = (email?: string | null) => new Request("http://localhost:3000/api/bookings", {
+    method: "POST",
+    headers: { origin: "http://localhost:3000", "content-type": "application/json" },
+    body: JSON.stringify({ name: "Amina", email, phone: "+1 555 010 0100", locationId: "loc", bookingSlotId: "slot", appointmentDate: "2027-03-02", hairstyleId: "style" }),
+  });
+  const api = (calls: string[][]) => createPublicBookingApi({
+    env: () => ({ ...LOCAL, APP_BASE_URL: "http://localhost:3000", PUBLIC_BOOKING_ENABLED: "true" }),
+    createBooking: async () => result,
+    startCheckout: async () => { throw new Error("not used"); },
+    getStatus: async () => { throw new Error("not used"); },
+    getAvailability: async () => { throw new Error("not used"); },
+    releaseBooking: async () => { throw new Error("not used"); },
+    consumeRateLimits: async (checks) => { calls.push(checks.map(({ rule }) => rule.scope)); return { allowed: true }; },
+    log: () => undefined,
+  });
+
+  it("skips only the email-specific bucket when email is absent", async () => {
+    for (const email of [undefined, null, "", "   "]) {
+      const calls: string[][] = [];
+      assert.equal((await api(calls).createBooking(request(email))).status, 201);
+      assert.deepEqual(calls, [["booking.ip.10m", "booking.ip.1d"], ["booking.phone.1d"]]);
+    }
+  });
+
+  it("preserves email, phone, and IP buckets when email is provided", async () => {
+    const calls: string[][] = [];
+    assert.equal((await api(calls).createBooking(request(" AMINA@Example.Test "))).status, 201);
+    assert.deepEqual(calls, [["booking.ip.10m", "booking.ip.1d"], ["booking.email.1d", "booking.phone.1d"]]);
+  });
+});
+
 describe("public responses", () => {
   it("map every booking error code to a public code", () => {
     const codes = Object.keys(BOOKING_ERROR_TO_PUBLIC) as BookingErrorCode[];

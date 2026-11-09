@@ -222,7 +222,7 @@ export async function listAdminAppointments(access: AdminAccess, filters: AdminA
 }
 
 export type AdminAppointmentDetail = AdminAppointmentSummary & {
-  customer: { name: string; email: string; phone: string };
+  customer: { name: string; email: string | null; phone: string };
   location: { name: string; address: string | null; timeZone: string };
   preferredStylistName: string | null;
   customerNotes: string | null;

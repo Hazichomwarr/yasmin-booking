@@ -210,10 +210,11 @@ export function createPublicBookingApi(deps: PublicBookingApiDeps = defaultPubli
       return unexpected(route, request, error);
     }
 
-    const contactLimited = await limited(route, request, cfg, [
-      ["bookingEmailDay", input.email],
+    const contactChecks: [RateLimitName, string][] = [
       ["bookingPhoneDay", input.phone.replace(/\D/g, "")],
-    ]);
+    ];
+    if (input.email) contactChecks.unshift(["bookingEmailDay", input.email]);
+    const contactLimited = await limited(route, request, cfg, contactChecks);
     if (contactLimited) return contactLimited;
 
     // Resolve a supplied credential before the write, then consume/re-check it

@@ -53,8 +53,8 @@ export class ConfirmationEmailDeliveryError extends Error {
 
 /** A server configuration problem, never a customer-address or provider error. */
 export class ConfirmationEmailConfigurationError extends Error {
-  constructor(readonly code: "owner-recipient-not-configured") {
-    super("Salon notification recipient is not configured.");
+  constructor(readonly code: "owner-recipient-not-configured" | "customer-recipient-not-configured") {
+    super(code === "owner-recipient-not-configured" ? "Salon notification recipient is not configured." : "Customer notification recipient is not configured.");
     this.name = "ConfirmationEmailConfigurationError";
   }
 }
@@ -111,7 +111,7 @@ type NotificationRow = {
     totalPriceCents: number;
     depositAmountCents: number;
     balanceDueCents: number;
-    customer: { name: string; email: string; phone: string };
+    customer: { name: string; email: string | null; phone: string };
     location: {
       addressLine1: string | null;
       addressLine2: string | null;
@@ -153,7 +153,7 @@ export function confirmationMessage(row: NotificationRow, env: Env = process.env
         "New confirmed appointment.",
         `Booking reference: ${reference}`,
         `Customer: ${appointment.customer.name}`,
-        `Email: ${appointment.customer.email}`,
+        `Email: ${appointment.customer.email ?? "Not provided"}`,
         `Phone: ${appointment.customer.phone}`,
         schedule,
         style && `Style: ${style}`,
@@ -164,7 +164,7 @@ export function confirmationMessage(row: NotificationRow, env: Env = process.env
     };
   }
 
-  if (!row.recipientEmail) throw new ConfirmationEmailConfigurationError("owner-recipient-not-configured");
+  if (!row.recipientEmail) throw new ConfirmationEmailConfigurationError("customer-recipient-not-configured");
   return {
     to: row.recipientEmail,
     subject: "Your Yasmin's Beauty Salon appointment is confirmed",

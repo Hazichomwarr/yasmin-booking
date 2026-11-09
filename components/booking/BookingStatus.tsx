@@ -98,7 +98,7 @@ export function BookingStatus({ returnedFrom }: { returnedFrom: "success" | "can
         {error && <p className={styles.error} role="alert">{error}</p>}
         {missing ? <>
           <h1 id="status-title">We can’t find a booking in this browser</h1>
-          <p className={styles.note}>Booking details are kept only in the browser you booked with, for 24 hours. If you already paid a deposit, <strong>please don’t book again</strong>: your confirmation email has the details, or contact the salon.</p>
+          <p className={styles.note}>Booking details are kept only in the browser you booked with, for 24 hours. If you already paid a deposit, <strong>please don’t book again</strong>; contact the salon for help confirming your appointment.</p>
           <Link className={styles.primary} href="/book">Start a new booking</Link>
         </> : !booking ? <p role="status">Loading your booking…</p> : <>
           <h1 id="status-title">{heading(booking.state, returnedFrom)}</h1>
@@ -124,7 +124,7 @@ function StateDetails({ booking, returnedFrom, pollingStopped, busy, onCheckout,
   const heldUntil = booking.holdExpiresAt ? new Date(booking.holdExpiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
   switch (booking.state) {
     case "confirmed":
-      return <p className={styles.note}>Your {money(booking.depositAmountCents)} deposit was received. Please pay the remaining {money(booking.balanceDueCents)} at the salon after your service. A confirmation email is on its way.</p>;
+      return <p className={styles.note}>Your {money(booking.depositAmountCents)} deposit was received. Please pay the remaining {money(booking.balanceDueCents)} at the salon after your service. Your confirmed appointment details are shown above.</p>;
     case "awaiting-payment":
       return <>
         <p className={styles.note}>Your time is held{heldUntil ? ` until about ${heldUntil}` : ""}. It’s booked only after your {money(booking.depositAmountCents)} nonrefundable deposit is paid.</p>

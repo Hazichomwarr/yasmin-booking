@@ -220,6 +220,16 @@ describe("admin appointment reads", { skip: integrationSkip }, () => {
     assert.equal(await getAdminAppointmentDetail(access, "does-not-exist"), null);
   });
 
+  it("returns a null-safe customer email in appointment detail", async () => {
+    const access = await adminAccess();
+    const [slot] = await place();
+    const booked = await appointment(slot, addSalonDays(salonToday(ADMIN_TIME_ZONE, await databaseNow()), 2), "CONFIRMED");
+    await prisma.customer.update({ where: { id: booked.customerId }, data: { email: null } });
+    const detail = await getAdminAppointmentDetail(access, booked.id);
+    assert.ok(detail);
+    assert.equal(detail.customer.email, null);
+  });
+
   it("returns only future, active, capacity-available slots for an admin reschedule", async () => {
     const access = await adminAccess();
     const { location, slots } = await createLocation({ slots: [{ time: "05:00", capacity: 1 }, { time: "11:00", capacity: 1 }, { time: "14:00", capacity: 1, isActive: false }] });

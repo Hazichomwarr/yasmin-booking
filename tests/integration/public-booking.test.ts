@@ -33,6 +33,15 @@ describe("public booking creation", { skip: integrationSkip }, () => {
     assert.equal(appointment.status, "PENDING_PAYMENT"); assert.equal(await prisma.customer.count(), 1); assert.equal(appointment.events.length, 1); assert.equal(appointment.events[0].type, "CREATED");
     assert.equal(appointment.accessTokenHash, createHash("sha256").update(result.accessToken).digest("hex")); assert.equal(appointment.customer.email, "customer@example.test");
   });
+  it("persists omitted, null, blank, and whitespace-only email as null", async () => {
+    for (const email of [undefined, null, "", "   "]) {
+      const request: Record<string, unknown> = { ...(await input()), email };
+      if (email === undefined) delete request.email;
+      const result = await createPublicBooking(request);
+      const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: result.booking.appointmentId }, include: { customer: true } });
+      assert.equal(appointment.customer.email, null);
+    }
+  });
   it("resolves the one-time token and never persists plaintext", async () => {
     const result = await createPublicBooking(await input()); const grant = await resolveBookingAccess(result.accessToken);
     const text = JSON.stringify(await Promise.all([prisma.appointment.findMany(), prisma.customer.findMany(), prisma.appointmentEvent.findMany(), prisma.payment.findMany()]));
@@ -84,6 +93,14 @@ describe("public booking creation", { skip: integrationSkip }, () => {
       const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: result.booking.appointmentId }, include: { customer: true } });
       assert.equal(appointment.customer.emailMarketingAt !== null, hasEmail); assert.equal(appointment.customer.smsMarketingAt !== null, hasSms);
     }
+  });
+  it("rejects email marketing consent without an email but permits SMS consent", async () => {
+    await assert.rejects(createPublicBooking({ ...(await input()), email: null, emailMarketingConsent: true }), PublicBookingValidationError);
+    const result = await createPublicBooking({ ...(await input()), email: null, smsMarketingConsent: true });
+    const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: result.booking.appointmentId }, include: { customer: true } });
+    assert.equal(appointment.customer.email, null);
+    assert.equal(appointment.customer.emailMarketingAt, null);
+    assert.ok(appointment.customer.smsMarketingAt);
   });
   it("enforces active location, active slot, matching location, weekday, and timezone policy", async () => {
     const inactiveLocation = await createLocation({ isActive: false, acceptsOnlineBooking: false });

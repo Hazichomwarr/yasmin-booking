@@ -16,7 +16,7 @@ import { parseSalonDate, salonClockTimeFromDatabase, salonDateToDatabase } from 
 
 export type PublicBookingInput = {
   name: string;
-  email: string;
+  email: string | null;
   phone: string;
   locationId: string;
   bookingSlotId: string;
@@ -175,14 +175,16 @@ export function parsePublicBookingInput(value: unknown): PublicBookingInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new PublicBookingValidationError("Expected an object.");
   const record = value as Record<string, unknown>;
   if (Object.keys(record).some((key) => !allowed.has(key))) throw new PublicBookingValidationError("Unknown public booking field.");
-  const required = ["name", "email", "phone", "locationId", "bookingSlotId", "appointmentDate", "hairstyleId"] as const;
+  const required = ["name", "phone", "locationId", "bookingSlotId", "appointmentDate", "hairstyleId"] as const;
   for (const key of required) if (typeof record[key] !== "string" || !record[key].trim()) throw new PublicBookingValidationError(`Invalid ${key}.`);
+  if (record.email !== undefined && record.email !== null && typeof record.email !== "string") throw new PublicBookingValidationError("Invalid email.");
   for (const key of ["hairstyleId", "hairstyleVariantId", "preferredStylistName", "customerNotes"]) if (record[key] !== undefined && record[key] !== null && typeof record[key] !== "string") throw new PublicBookingValidationError(`Invalid ${key}.`);
   for (const key of ["emailMarketingConsent", "smsMarketingConsent"]) if (record[key] !== undefined && typeof record[key] !== "boolean") throw new PublicBookingValidationError(`Invalid ${key}.`);
+  const normalizedEmail = typeof record.email === "string" ? record.email.trim().toLowerCase() || null : null;
   const normalized = {
     ...record,
     name: (record.name as string).trim(),
-    email: (record.email as string).trim().toLowerCase(),
+    email: normalizedEmail,
     phone: (record.phone as string).trim(),
     locationId: (record.locationId as string).trim(),
     bookingSlotId: (record.bookingSlotId as string).trim(),
@@ -191,8 +193,9 @@ export function parsePublicBookingInput(value: unknown): PublicBookingInput {
     emailMarketingConsent: record.emailMarketingConsent === true,
     smsMarketingConsent: record.smsMarketingConsent === true,
   } as PublicBookingInput;
-  if (normalized.name.length > LIMITS.name || normalized.email.length > LIMITS.email || normalized.phone.length > LIMITS.phone || normalized.locationId.length > 191 || normalized.bookingSlotId.length > 191 || (normalized.preferredStylistName?.length ?? 0) > LIMITS.preferredStylistName || (normalized.customerNotes?.length ?? 0) > LIMITS.customerNotes) throw new PublicBookingValidationError("A field exceeds its maximum length.");
-  if (!PUBLIC_EMAIL_PATTERN.test(normalized.email)) throw new PublicBookingValidationError("Invalid email.");
+  if (normalized.name.length > LIMITS.name || (normalized.email?.length ?? 0) > LIMITS.email || normalized.phone.length > LIMITS.phone || normalized.locationId.length > 191 || normalized.bookingSlotId.length > 191 || (normalized.preferredStylistName?.length ?? 0) > LIMITS.preferredStylistName || (normalized.customerNotes?.length ?? 0) > LIMITS.customerNotes) throw new PublicBookingValidationError("A field exceeds its maximum length.");
+  if (normalized.email && !PUBLIC_EMAIL_PATTERN.test(normalized.email)) throw new PublicBookingValidationError("Invalid email.");
+  if (!normalized.email && normalized.emailMarketingConsent) throw new PublicBookingValidationError("Email marketing consent requires an email address.");
   if (!PUBLIC_PHONE_PATTERN.test(normalized.phone)) throw new PublicBookingValidationError("Invalid phone.");
   try { parseSalonDate(normalized.appointmentDate); } catch { throw new PublicBookingValidationError("Invalid appointmentDate."); }
   return normalized;

@@ -136,7 +136,7 @@ model BookingSlot {
 model Customer {
   id                     String                  @id @default(cuid())
   name                   String
-  email                  String
+  email                  String?
   phone                  String
   /// When the customer's CURRENT email-marketing consent was granted; null =
   /// not consented. Evidence for the grant (and every withdrawal) lives in
